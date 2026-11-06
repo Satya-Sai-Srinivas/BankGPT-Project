@@ -142,6 +142,11 @@ def stat_answer(view: View, fr: QueryFrame) -> Optional[object]:
     if "count" not in fr.intents and not re.search(r"\bhow big\b|\bassets\b", fr.norm):
         return None
     c: Claims = view.claims
+    content = set(tokens(fr.norm)) - {"many", "number", "total", "current", "currently", "now", "today", "dupaco",
+                                       "branch", "location", "office", "member", "employe", "staff", "county",
+                                       "counti", "asset", "big", "operat", "physical", "membership", "full-s", "servic"}
+    if content:
+        return None          # "how many employees used Volunteer Time Off" is not an org-size question
     for name, rx in STAT_CUES:
         if re.search(rx, fr.norm):
             st = c.latest(name)
@@ -279,3 +284,35 @@ def _clean_target(t: str) -> str:
         if not re.fullmatch(r"[a-z]{2,12}", frag):
             t = base
     return t
+
+
+# ---------------------------------------------------------------------------------------------
+# Membership eligibility
+# ---------------------------------------------------------------------------------------------
+def eligibility_answer(kb, view: View, fr: QueryFrame) -> Optional[object]:
+    if not re.search(r"\beligib|\bwho can (?:join|become)|\bqualif\w* (?:for|to) (?:join|membership)|\bcan i join\b", fr.norm):
+        return None
+    best = None
+    for ch in kb.index.chunks:
+        if not ch.mask & (1 << view.idx):
+            continue
+        if re.search(r"(?i)eligible|who can join", ch.heading) and "- " in ch.text:
+            pv = ch.versions[view.idx]
+            if best is None or pv.authority > best[1].authority:
+                best = (ch, pv)
+    if not best:
+        return None
+    ch, pv = best
+    items = [plain(l.lstrip("-* ")) for l in ch.text.split("\n") if l.lstrip().startswith(("- ", "* "))]
+    text = "You're eligible to join Dupaco if any of these apply: " + "; ".join(i.rstrip(".") for i in items[:5]) + "."
+    srcs = [(pv.url, view.sid, "; ".join(items)[:200])]
+    st = view.claims.latest("counties")
+    if st:
+        m = re.search(r"serves residents in [^.]*", st.sentence)
+        if m:
+            text += f" The charter area: Dupaco {m.group(0).rstrip('.')}."
+            srcs.append((st.page.url, view.sid, st.sentence[:200]))
+    tail = re.search(r"To join Dupaco[^.]*\.", ch.text)
+    if tail:
+        text += " " + plain(tail.group(0))
+    return _draft(text, srcs, trace="eligibility")

@@ -337,6 +337,8 @@ def _sentence_score(s: str, qset: set, idf: dict, fr: QueryFrame) -> float:
         sc -= 0.1          # an FAQ question restates the query; prefer its answer
     if len(s) < 25:
         sc -= 0.1
+    if "dupaco" in fr.norm and "dupaco" in s.lower():
+        sc += 0.08         # the question is about Dupaco itself, not the industry
     return sc
 
 
@@ -358,11 +360,18 @@ def generic_answer(kb: KnowledgeBase, view: View, fr: QueryFrame) -> Draft:
     best = None
     for rank_i, (score, ch) in enumerate(hits[:6]):
         sents = _sentences(ch.text)
+        head_ov = len(qset & set(tokens(ch.heading))) / max(1, len(qset))
+        is_list = sum(1 for l in ch.text.split("\n") if l.lstrip().startswith(("- ", "* "))) >= 2
+        if head_ov >= 0.5 and is_list:
+            items = [plain(l.lstrip("-* ")) for l in ch.text.split("\n") if l.lstrip().startswith(("- ", "* "))]
+            sc = 0.6 + head_ov + 0.35 * score / top
+            if best is None or sc > best[0]:
+                best = (sc, 0, [plain(ch.heading).rstrip(":") + ": " + "; ".join(items[:6]) + "."], ch)
         for i, s in enumerate(sents):
             sc = _sentence_score(s, qset, idf, fr)
             if sc <= 0:
                 continue
-            sc += 0.35 * score / top
+            sc += 0.35 * score / top + 0.06 / (1 + ch.order) + 0.04 / (1 + i)
             if best is None or sc > best[0]:
                 best = (sc, i, sents, ch)
     if best is None or best[0] < 0.55:
@@ -472,6 +481,10 @@ class Answerer:
                 return d
         if fr.family and (fr.rate_q or fr.pct_in_q):
             d = rates_answer(view, fr)
+            if d is not None:
+                return d
+        if "eligibility" in it:
+            d = H.eligibility_answer(self.kb, view, fr)
             if d is not None:
                 return d
         if fr.salient and fr.rate_q:

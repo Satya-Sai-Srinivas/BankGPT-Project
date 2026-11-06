@@ -217,7 +217,23 @@ def extract(pages: dict[str, list[PageVersion]], view_date: date) -> Claims:
                         d = parse_date(m.group(2))
                         if d:
                             c.events.append(Event(s, d, pv.pub_date, pv, "close"))
-    c.branches = list(branches.values())
+    # merge dropdown-only entries ("Galena: Oldenburg Ln.") into richer ones ("Galena: 11375 Oldenburg Ln.")
+    merged: list[Branch] = []
+    for b in sorted(branches.values(), key=lambda b: (-(bool(b.address) + bool(b.lobby) + bool(b.phone)), b.name)):
+        bt = {w for w in re.findall(r"[a-z]{4,}", (b.street or "").lower())} - {"road", "street", "drive", "avenue", "highway", "business"}
+        tgt = next((m for m in merged if m.city == b.city and bt and bt & {w for w in re.findall(r"[a-z]{4,}", (m.street or "").lower())}), None)
+        if tgt:
+            tgt.sources.extend(b.sources)
+            for attr in ("address", "phone"):
+                if not getattr(tgt, attr) and getattr(b, attr):
+                    setattr(tgt, attr, getattr(b, attr))
+            if not tgt.lobby and b.lobby:
+                tgt.lobby = b.lobby
+            if not tgt.drive_up and b.drive_up:
+                tgt.drive_up = b.drive_up
+        else:
+            merged.append(b)
+    c.branches = merged
     return c
 
 

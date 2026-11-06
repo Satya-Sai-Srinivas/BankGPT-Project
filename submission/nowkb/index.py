@@ -22,6 +22,7 @@ class Chunk:
     key: str                  # canonical page key
     heading: str
     text: str                 # markdown text of the chunk
+    order: int = 0            # position of the chunk within its page (0 = first)
     mask: int = 0             # bit v set -> valid in view v
     versions: dict = field(default_factory=dict)   # view -> PageVersion
     tf: dict = field(default_factory=dict)
@@ -102,12 +103,12 @@ class ChunkIndex:
         if page.ptype in ("listing", "junk"):
             return
         url_toks = " ".join(re.split(r"[/\-_.?=&]+", page.key.split("//", 1)[-1]))
-        for heading, txt in split_chunks(page):
+        for order, (heading, txt) in enumerate(split_chunks(page)):
             ident = (page.key, txt)
             cid = self._by_ident.get(ident)
             if cid is None:
                 cid = len(self.chunks)
-                ch = Chunk(cid=cid, key=page.key, heading=heading, text=txt)
+                ch = Chunk(cid=cid, key=page.key, heading=heading, text=txt, order=order)
                 tf: dict[str, float] = defaultdict(float)
                 for t in tokens(plain(txt)):
                     tf[t] += self.FIELD_W["body"]
