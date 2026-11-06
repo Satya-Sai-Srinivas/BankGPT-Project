@@ -79,6 +79,8 @@ def select_rows(view: View, fr: QueryFrame, family: str) -> list[tuple[tuple, Fa
             continue
         if fr.jumbo and not q.get("jumbo"):
             continue
+        if fr.jumbo is False and q.get("jumbo"):
+            continue
         if fr.special and family in ("certificate", "ira") and not q.get("special"):
             continue
         if fr.regular and family in ("certificate", "ira") and q.get("special"):
@@ -248,7 +250,7 @@ def rates_answer(view: View, fr: QueryFrame) -> Optional[Draft]:
         return refusal(f"salient qualifier {fr.salient} not in any {family} row")
     rows = _sort_rows(rows)
     jumbo_note = ""
-    if not fr.jumbo and not fr.amount and family in ("certificate", "ira") and "list" not in fr.intents:
+    if fr.jumbo is None and not fr.amount and family in ("certificate", "ira") and "list" not in fr.intents:
         nonj = [r for r in rows if not r[1].quals.get("jumbo")]
         if nonj and len(nonj) < len(rows) and fr.term:
             rows = nonj
@@ -363,7 +365,7 @@ def _sentence_score(s: str, qset: set, idf: dict, fr: QueryFrame, expansions: se
     if "dupaco" in fr.norm and "dupaco" in s.lower():
         sc += 0.08         # the question is about Dupaco itself, not the industry
     if re.search(r"(?i)^(for more information|to learn more|learn more|click|visit|call us|contact us)\b", s):
-        sc -= 0.15         # calls to action do not answer anything
+        sc -= 0.3          # calls to action do not answer anything
     if re.search(r"^(what is|what's|what are|tell me about|explain|describe)\b", fr.norm) and \
             re.search(r"\b(provides?|offers?|is an?|allows?|helps?|gives?|partnering|designed)\b", s):
         sc += 0.06

@@ -103,7 +103,9 @@ def parse(question: str) -> QueryFrame:
     if "checking" in f.families and len(f.families) > 1:
         f.families = [x for x in f.families if x != "checking"] + ["checking"]
     f.term = term_months(norm)
-    if re.search(r"\bjumbo\b", norm):
+    if re.search(r"\b(?:not|non|without|excluding|no)[- ]jumbo\b|\bnot the jumbo\b|\bnon-jumbo\b", norm):
+        f.jumbo = False
+    elif re.search(r"\bjumbo\b", norm):
         f.jumbo = True
     f.special = bool(re.search(r"\bspecials?\b|\bpromo", norm))
     f.regular = bool(re.search(r"\bregular\b|\bstandard\b", norm))
