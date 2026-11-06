@@ -142,9 +142,11 @@ def stat_answer(view: View, fr: QueryFrame) -> Optional[object]:
     if "count" not in fr.intents and not re.search(r"\bhow big\b|\bassets\b", fr.norm):
         return None
     c: Claims = view.claims
-    content = set(tokens(fr.norm)) - {"many", "number", "total", "current", "currently", "now", "today", "dupaco",
-                                       "branch", "location", "office", "member", "employe", "staff", "county",
-                                       "counti", "asset", "big", "operat", "physical", "membership", "full-s", "servic"}
+    allowed = set(tokens("many number total current currently now today dupaco branch branches location locations "
+                         "office offices member members employee employees staff county counties assets asset big "
+                         "operate operates operating physical membership full-service service services have has "
+                         "serve serves run runs open"))
+    content = set(tokens(fr.norm)) - allowed
     if content:
         return None          # "how many employees used Volunteer Time Off" is not an org-size question
     for name, rx in STAT_CUES:
@@ -174,6 +176,8 @@ def stat_answer(view: View, fr: QueryFrame) -> Optional[object]:
 def event_answer(view: View, fr: QueryFrame) -> Optional[object]:
     c: Claims = view.claims
     if not c.events or not re.search(r"\bclos|\bopen\b|\bstill\b|\blast day\b", fr.norm):
+        return None
+    if not re.search(r"^(when|is|was|did|has|does|what date|what day)\b|\bstill\b|\bclosing date\b|\blast day\b", fr.norm):
         return None
     qt = set(tokens(fr.raw)) - GENERIC_WORDS
     best = None
@@ -246,6 +250,10 @@ def link_answer(view: View, fr: QueryFrame) -> Optional[object]:
     popularity on current pages; www.dupaco.com targets that are not in the crawl are legacy links."""
     c: Claims = view.claims
     qt = set(tokens(fr.norm)) - LINK_STOP
+    syn = {tokens(a)[0]: tokens(b)[0] for a, b in (("membership", "join"), ("member", "join"), ("apply", "join"),
+                                                    ("locator", "contact"), ("atm", "location"), ("branch", "location"))}
+    if re.search(r"\b(membership|member|join)\b", fr.norm):
+        qt = {syn.get(t, t) for t in qt}
     if not qt:
         return None
     scores: dict[str, float] = defaultdict(float)
@@ -294,7 +302,9 @@ def _clean_target(t: str) -> str:
 # Membership eligibility
 # ---------------------------------------------------------------------------------------------
 def eligibility_answer(kb, view: View, fr: QueryFrame) -> Optional[object]:
-    if not re.search(r"\beligib|\bwho can (?:join|become)|\bqualif\w* (?:for|to) (?:join|membership)|\bcan i join\b", fr.norm):
+    if not re.search(r"\beligib|\bwho can (?:join|become)|\bqualif\w* (?:for|to) (?:join|membership)|\bcan i join\b|"
+                     r"\b(?:how much|minimum|deposit)\b.*\b(?:join|membership|become a member)\b|"
+                     r"\b(?:join|membership|become a member)\b.*\b(?:how much|minimum|deposit)\b", fr.norm):
         return None
     best = None
     for ch in kb.index.chunks:
@@ -342,3 +352,39 @@ def contact_answer(view: View, fr: QueryFrame) -> Optional[object]:
         text += f" You can also call Dupaco at {mp[0]}."
     text = re.sub(r"\s+", " ", text).strip()
     return _draft(text, [(pv.url, view.sid, text[:200])], trace="contact")
+
+
+# ---------------------------------------------------------------------------------------------
+# Fees (rate & fee schedule)
+# ---------------------------------------------------------------------------------------------
+FEE_STOP = {"fee", "much", "cost", "charge", "price", "pay", "do", "for", "what", "how", "is", "the", "a"}
+
+
+def fee_answer(view: View, fr: QueryFrame) -> Optional[object]:
+    c: Claims = view.claims
+    if not c.fees or not re.search(r"\bfees?\b|\bcharge\b|\bcost\b|\bhow much\b|\bprice\b", fr.norm):
+        return None
+    if fr.rate_q and fr.family:
+        return None
+    qt = set(tokens(fr.norm)) - FEE_STOP
+    if not qt:
+        return None
+    best = []
+    for name, amount, pv in c.fees:
+        nt = set(tokens(name))
+        ov = len(qt & nt)
+        if ov == 0:
+            continue
+        sc = ov / len(qt) - 0.02 * max(0, len(nt) - ov)
+        if "busine" in nt and "busine" not in qt:
+            sc -= 0.05
+        best.append((sc, -pv.authority, name, amount, pv))
+    if not best:
+        return None
+    best.sort(key=lambda x: (-x[0], x[1], x[2]))
+    sc, _, name, amount, pv = best[0]
+    if sc < 0.6:
+        return None
+    eff = re.search(r"(?i)effective ([A-Z][a-z]+\.? \d{1,2}, \d{4})", pv.text)
+    text = f"{name}: {amount}" + (f" (Rate and Fee Schedule, effective {eff.group(1)})" if eff else "") + "."
+    return _draft(text, [(pv.url, view.sid, f"{name} {amount}")], trace=f"fee: {sc:.2f}")

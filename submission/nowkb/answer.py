@@ -247,6 +247,12 @@ def rates_answer(view: View, fr: QueryFrame) -> Optional[Draft]:
     if fr.salient and family in ("mortgage", "heloc", "home_equity_loan", "certificate", "auto_loan"):
         return refusal(f"salient qualifier {fr.salient} not in any {family} row")
     rows = _sort_rows(rows)
+    jumbo_note = ""
+    if not fr.jumbo and not fr.amount and family in ("certificate", "ira") and "list" not in fr.intents:
+        nonj = [r for r in rows if not r[1].quals.get("jumbo")]
+        if nonj and len(nonj) < len(rows) and fr.term:
+            rows = nonj
+            jumbo_note = " A jumbo version (higher minimum deposit) is also available."
     if "highest" in fr.intents and len(rows) > 1:
         def best(item):
             key, f = item
@@ -274,7 +280,7 @@ def rates_answer(view: View, fr: QueryFrame) -> Optional[Draft]:
         text = lines[0].replace(": ", " — ", 1) + "."
     else:
         text = f"Current {name} rates — " + "; ".join(lines) + "."
-    d = Draft(text=text, sources=source_list(view, keys), note=stale_note(view, keys))
+    d = Draft(text=text + jumbo_note, sources=source_list(view, keys), note=stale_note(view, keys))
     d.trace.append(f"rates: family={family} rows={len(rows)}")
     return d
 
@@ -327,17 +333,26 @@ _ANSWER_TYPE = {
     "count": re.compile(r"\b\d[\d,]*\b"),
     "when": re.compile(r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sept?|Oct|Nov|Dec)[a-z]*\.? \d{1,2}|\b20\d\d\b"),
     "fee": re.compile(r"\$\d"),
+    "how_much": re.compile(r"\$\d"),
 }
 
 
-def _sentence_score(s: str, qset: set, idf: dict, fr: QueryFrame) -> float:
+def _bigrams(text: str) -> set:
+    ws = [w for w in re.findall(r"[a-z0-9$]+", text.lower()) if w not in ("the", "a", "an", "my", "your", "of", "to")]
+    return {f"{a} {b}" for a, b in zip(ws, ws[1:])}
+
+
+def _sentence_score(s: str, qset: set, idf: dict, fr: QueryFrame, expansions: set = frozenset()) -> float:
     st = set(tokens(s))
     ov = qset & st
-    if not ov:
+    if not ov and not (expansions & st):
         return 0.0
     sc = sum(idf.get(t, 1.0) for t in ov) / (sum(idf.get(t, 1.0) for t in qset) or 1.0)
+    sc += 0.12 * len(expansions & st)
+    sc += 0.2 * len(_bigrams(fr.raw) & _bigrams(s))
+    intents = fr.intents | ({"how_much"} if "how much" in fr.norm else set())
     for intent, rx in _ANSWER_TYPE.items():
-        if intent in fr.intents and rx.search(s):
+        if intent in intents and rx.search(s):
             sc += 0.15
     if fr.rate_q and "%" in s:
         sc += 0.1
@@ -347,6 +362,11 @@ def _sentence_score(s: str, qset: set, idf: dict, fr: QueryFrame) -> float:
         sc -= 0.1
     if "dupaco" in fr.norm and "dupaco" in s.lower():
         sc += 0.08         # the question is about Dupaco itself, not the industry
+    if re.search(r"(?i)^(for more information|to learn more|learn more|click|visit|call us|contact us)\b", s):
+        sc -= 0.15         # calls to action do not answer anything
+    if re.search(r"^(what is|what's|what are|tell me about|explain|describe)\b", fr.norm) and \
+            re.search(r"\b(provides?|offers?|is an?|allows?|helps?|gives?|partnering|designed)\b", s):
+        sc += 0.06
     return sc
 
 
@@ -364,19 +384,21 @@ def generic_answer(kb: KnowledgeBase, view: View, fr: QueryFrame) -> Draft:
     n = max(1, len(kb.index.chunks))
     idf = {t: math.log(1 + n / (1 + kb.index.df.get(t, 0))) for t in set(q_toks)}
     qset = set(q_toks)
+    exp = {t for t, w in weights.items() if w < 1.0}
     top = hits[0][0] or 1.0
     best = None
     for rank_i, (score, ch) in enumerate(hits[:6]):
         sents = _sentences(ch.text)
         head_ov = len(qset & set(tokens(ch.heading))) / max(1, len(qset))
         is_list = sum(1 for l in ch.text.split("\n") if l.lstrip().startswith(("- ", "* "))) >= 2
-        if head_ov >= 0.5 and is_list:
+        rare = {t for t in qset if idf.get(t, 0) >= 0.6 * max(idf.values())}
+        if head_ov >= 0.5 and is_list and rare <= (set(tokens(ch.heading)) | set(tokens(ch.text))):
             items = [plain(l.lstrip("-* ")) for l in ch.text.split("\n") if l.lstrip().startswith(("- ", "* "))]
             sc = 0.6 + head_ov + 0.35 * score / top
             if best is None or sc > best[0]:
                 best = (sc, 0, [plain(ch.heading).rstrip(":") + ": " + "; ".join(items[:6]) + "."], ch)
         for i, s in enumerate(sents):
-            sc = _sentence_score(s, qset, idf, fr)
+            sc = _sentence_score(s, qset, idf, fr, exp)
             if sc <= 0:
                 continue
             sc += 0.35 * score / top + 0.06 / (1 + ch.order) + 0.04 / (1 + i)
@@ -405,6 +427,11 @@ def generic_answer(kb: KnowledgeBase, view: View, fr: QueryFrame) -> Draft:
         if series:
             text = series[0]
             sources += series[1]
+    # A fee question needs an amount that is about *this* fee (not just any "$" on the page).
+    if "fee" in fr.intents and re.search(r"\b(fee|charge|cost)\b", fr.norm):
+        cover = max((len(qset & set(tokens(s))) / max(1, len(qset)) for s in sentences(text) if "$" in s), default=0.0)
+        if cover < 0.75:
+            return refusal(f"fee question but no amount for this fee (coverage {cover:.2f})")
     # A rate question answered by text with no rate in it means the rate is not published.
     if fr.rate_q and re.search(r"\b(rate|apr|apy|interest)\b", fr.norm) and "%" not in text \
             and not (fr.intents & {"how", "link", "list", "eligibility"}):
@@ -487,6 +514,9 @@ class Answerer:
             d = H.stat_answer(view, fr)
             if d is not None:
                 return d
+        d = H.fee_answer(view, fr)
+        if d is not None:
+            return d
         if fr.family and (fr.rate_q or fr.pct_in_q):
             d = rates_answer(view, fr)
             if d is not None:

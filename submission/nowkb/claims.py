@@ -70,6 +70,7 @@ class Claims:
     routing: list[tuple[str, PageVersion]] = field(default_factory=list)
     main_phone: list[tuple[str, PageVersion]] = field(default_factory=list)
     link_lines: list[tuple[str, str, str, PageVersion]] = field(default_factory=list)  # (line, anchor, target, page)
+    fees: list[tuple[str, str, PageVersion]] = field(default_factory=list)              # (fee name, amount, page)
     inlinks: Counter = field(default_factory=Counter)
 
     def latest(self, name: str) -> Optional[Stat]:
@@ -134,6 +135,18 @@ def extract(pages: dict[str, list[PageVersion]], view_date: date) -> Claims:
                             continue
                         c.link_lines.append((plain(line)[:300], anchor, target, pv))
                         c.inlinks[canon_url(target)] += 1
+            # ---- fee schedule rows ("|Domestic wire|$25.00 each|" or "Stop payment ... $30.00* per item")
+            if pv.ptype == "fee_doc" or re.search(r"(?i)\bfee schedule\b|/fees?$", pv.url):
+                for line in lines:
+                    st = line.strip()
+                    if st.startswith("|"):
+                        cells = [x.strip() for x in st.strip("|").split("|")]
+                        if len(cells) >= 2 and "$" in cells[1] and not cells[0].startswith("$"):
+                            c.fees.append((plain(cells[0]), plain(cells[1]).replace("*", "").strip(), pv))
+                        continue
+                    m = re.match(r"^([A-Za-z][^$:|]{3,90}?)\s*:?\s*(\$\d[\d,.]*\*?(?:\s?(?:per|each|for)[^.;]{0,40})?)", plain(st))
+                    if m:
+                        c.fees.append((m.group(1).strip(), m.group(2).replace("*", "").strip(), pv))
             # ---- routing number / main phone
             for m in re.finditer(r"(?i)routing(?: number)?\W{0,5}(?:is\W{0,3})?(\d{9})\b", text):
                 c.routing.append((m.group(1), pv))

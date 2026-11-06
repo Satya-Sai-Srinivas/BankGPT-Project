@@ -44,6 +44,13 @@ def split_chunks(page: PageVersion) -> list[tuple[str, str]]:
         buf, words = [], 0
 
     lines = page.text.split("\n")
+    if page.ptype == "newsroom":
+        # press-release tail ("###" then "ABOUT DUPACO ...") is boilerplate; its facts live in the claims store
+        for k, ln in enumerate(lines):
+            st = ln.strip()
+            if st in ("###", "# # #", "\\# # #") or re.match(r"(?i)^\**about dupaco community credit union", st):
+                lines = lines[:k]
+                break
     i = 0
     while i < len(lines):
         line = lines[i]
