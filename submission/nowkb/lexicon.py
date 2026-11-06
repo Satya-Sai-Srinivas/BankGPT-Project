@@ -17,7 +17,7 @@ FAMILIES: list[tuple[str, str, str, str]] = [
     ("you_name_it", "You Name It Savings", "deposit", r"\byou[- ]name[- ]it\b"),
     ("holiday_club", "Holiday Club Savings", "deposit", r"\bholiday club\b"),
     ("share_savings", "Share Savings", "deposit", r"\bshare savings\b|\bregular savings\b|\bbasic savings\b|\bsavings account\b(?! rates)|\bshare account\b|\bsavings (?:tiers?|rates?|apy)\b"),
-    ("certificate", "Certificate", "deposit", r"\bcertificates?\b|\bcds?\b|\bcertificate of deposit\b|\bshare certificates?\b|\bterm[- ]share\b"),
+    ("certificate", "Certificate", "deposit", r"\b\d{1,2}[- ]?month (?:fixed )?(?:jumbo )?specials?\b|\bcertificates?\b|\bcds?\b|\bcertificate of deposit\b|\bshare certificates?\b|\bterm[- ]share\b"),
     ("first_rate_checking", "1st Rate Checking", "deposit", r"\b1st rate checking\b|\bfirst rate checking\b|\binterest[- ]bearing checking\b"),
     ("free_checking", "Free Checking", "deposit", r"\bfree checking\b"),
     ("checking", "Checking", "deposit", r"\bchecking\b"),

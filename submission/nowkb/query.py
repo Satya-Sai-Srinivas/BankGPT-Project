@@ -50,6 +50,8 @@ class QueryFrame:
     intents: set = field(default_factory=set)
     salient: list[str] = field(default_factory=list)
     date_in_text: Optional[date] = None
+    asks_other: bool = False
+    change_q: bool = False
     pct_in_q: list[float] = field(default_factory=list)
 
     @property
@@ -127,7 +129,12 @@ def parse(question: str) -> QueryFrame:
     amts = [a for a in money_values(raw) if a >= 1]
     if amts:
         f.amount = amts[0]
-    f.rate_q = bool(RATE_WORDS.search(norm))
+    # product names that contain "rate" ("1st Rate Checking") are not rate questions by themselves
+    f.rate_q = bool(RATE_WORDS.search(re.sub(r"\b(?:1st|first) rate\b|\brate relief\b", " ", norm)))
+    f.asks_other = bool(re.search(r"\bwhat (?:credit )?score\b|\bcredit score\b|\bqualif|\brequire|\bminimum (?:to|balance|deposit)|"
+                                  r"\bhow long\b|\bpenalt|\bterms? and conditions\b|\bloan-to-value\b|\bltv\b", norm))
+    f.change_q = bool(re.search(r"\b(gone|go|went) (?:up|down)\b|\b(?:increase|decrease|rise|rose|drop|fall|fell)[ds]?\b|"
+                                r"\bchanged?\b|\bused to\b|\bpreviously\b|\bhistory\b|\bover time\b|\bsince (?:may|june|july|august|september)\b", norm))
     if re.search(r"\bdividend", norm):
         f.attr = "dividend"
     elif re.search(r"\bapy\b", norm):

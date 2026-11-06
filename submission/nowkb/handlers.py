@@ -303,7 +303,7 @@ def _clean_target(t: str) -> str:
 # ---------------------------------------------------------------------------------------------
 def eligibility_answer(kb, view: View, fr: QueryFrame) -> Optional[object]:
     if not re.search(r"\beligib|\bwho can (?:join|become)|\bqualif\w* (?:for|to) (?:join|membership)|\bcan i join\b|"
-                     r"\b(?:how much|minimum|deposit)\b.*\b(?:join|membership|become a member)\b|"
+                     r"\b(?:how much|minimum|deposit|requirements?|need)\b.*\b(?:join|membership|become a member)\b|"
                      r"\b(?:join|membership|become a member)\b.*\b(?:how much|minimum|deposit)\b", fr.norm):
         return None
     best = None
@@ -369,12 +369,14 @@ def fee_answer(view: View, fr: QueryFrame) -> Optional[object]:
     qt = set(tokens(fr.norm)) - FEE_STOP
     if not qt:
         return None
+    distinct = set(tokens("free analysis 1st first business consumer personal lost replacement replace stolen "
+                          "international domestic incoming outgoing foreign rush expedited"))
     best = []
     for name, amount, pv in c.fees:
         nt = set(tokens(name))
         ov = len(qt & nt)
-        if ov == 0:
-            continue
+        if ov == 0 or (qt - nt) & distinct:
+            continue          # "Free Checking" must not match "Analysis checking monthly fee"
         sc = ov / len(qt) - 0.02 * max(0, len(nt) - ov)
         if "busine" in nt and "busine" not in qt:
             sc -= 0.05

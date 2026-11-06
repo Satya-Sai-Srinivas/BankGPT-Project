@@ -333,6 +333,41 @@ def _sentences(text: str) -> list[str]:
     return [x for x in out if len(x) > 2]
 
 
+def change_answer(kb: KnowledgeBase, view: View, fr: QueryFrame) -> Optional[Draft]:
+    """"Has the 17-month special gone up?" -> the value in every crawl where it changed, oldest to newest."""
+    family = fr.family
+    rows = select_rows(view, fr, family)
+    if not rows:
+        return None
+    rows = _sort_rows(rows)
+    if fr.jumbo is None and family in ("certificate", "ira"):
+        rows = [r for r in rows if not r[1].quals.get("jumbo")] or rows
+    attr = {"deposit": "apy", "mortgage": "rate", "loan": "apr", "card": "apr"}.get(FAMILY_KIND.get(family, ""), "apy")
+    parts, keys = [], []
+    for key, f in rows[:3]:
+        hist = []
+        for v in kb.views:
+            w = v.winner(key, attr)
+            if w is not None and w.page.tier1 and w.primary and (not hist or hist[-1][1].vkey != w.vkey):
+                hist.append((v, w))
+        if not hist:
+            continue
+        keys.append(key)
+        label = _display_label(f)
+        if len(hist) == 1:
+            parts.append(f"{label}: unchanged at {hist[0][1].display} across our crawls (May 12 to {fmt_date(view.taken_on)}).")
+            continue
+        steps = "; ".join(f"{w.display} as of {fmt_date(v.taken_on)}" for v, w in hist)
+        direction = "up" if hist[-1][1].value > hist[0][1].value else "down" if hist[-1][1].value < hist[0][1].value else "back"
+        parts.append(f"{label}: went {direction} — {steps} (current: {hist[-1][1].display}).")
+    if not parts:
+        return None
+    lead = "Yes — " if any("went up" in p or "went down" in p for p in parts) else ""
+    d = Draft(text=lead + " ".join(parts), sources=source_list(view, keys), note=stale_note(view, keys))
+    d.trace.append(f"change: family={family}")
+    return d
+
+
 _YEAR = re.compile(r"\b(?:in|during|for) (20\d\d)\b")
 _ANSWER_TYPE = {
     "count": re.compile(r"\b\d[\d,]*\b"),
@@ -361,6 +396,11 @@ def _sentence_score(s: str, qset: set, idf: dict, fr: QueryFrame, expansions: se
             sc += 0.15
     if fr.rate_q and "%" in s:
         sc += 0.1
+    if re.search(r"\bfees?\b", fr.norm):
+        if re.search(r"\bfees?\b", s, re.I) and ("$" in s or re.search(r"(?i)\bno\b[^.]{0,25}\bfees?\b", s)):
+            sc += 0.3          # a fee question wants the sentence that states the fee (or that there is none)
+        elif "%" in s and not fr.rate_q:
+            sc -= 0.15         # rate-table rows do not answer fee questions
     if s.endswith("?"):
         sc -= 0.1          # an FAQ question restates the query; prefer its answer
     if len(s) < 25:
@@ -397,7 +437,8 @@ def generic_answer(kb: KnowledgeBase, view: View, fr: QueryFrame) -> Draft:
         head_ov = len(qset & set(tokens(ch.heading))) / max(1, len(qset))
         is_list = sum(1 for l in ch.text.split("\n") if l.lstrip().startswith(("- ", "* "))) >= 2
         rare = {t for t in qset if idf.get(t, 0) >= 0.6 * max(idf.values())}
-        if head_ov >= 0.5 and is_list and rare <= (set(tokens(ch.heading)) | set(tokens(ch.text))):
+        list_q = bool(fr.intents & {"list", "eligibility"}) or bool(re.search(r"^(what are|which|how do i|how can i|what do i need)\b", fr.norm))
+        if list_q and head_ov >= 0.5 and is_list and rare <= (set(tokens(ch.heading)) | set(tokens(ch.text))):
             items = [plain(l.lstrip("-* ")) for l in ch.text.split("\n") if l.lstrip().startswith(("- ", "* "))]
             sc = 0.6 + head_ov + 0.35 * score / top
             if best is None or sc > best[0]:
@@ -434,8 +475,12 @@ def generic_answer(kb: KnowledgeBase, view: View, fr: QueryFrame) -> Draft:
             sources += series[1]
     # A fee question needs an amount that is about *this* fee (not just any "$" on the page).
     if "fee" in fr.intents and re.search(r"\b(fee|charge|cost)\b", fr.norm):
-        cover = max((len(qset & set(tokens(s))) / max(1, len(qset)) for s in sentences(text) if "$" in s), default=0.0)
-        if cover < 0.75:
+        ctx = set(tokens(ch.heading + " " + pv.title))
+        total = sum(idf.get(t, 1.0) for t in qset) or 1.0
+        cover = max((sum(idf.get(t, 1.0) for t in qset & (set(tokens(s)) | ctx)) / total
+                     for s in sentences(text) if "$" in s or re.search(r"(?i)\bno\b[^.]{0,25}\bfees?\b", s)),
+                    default=0.0)
+        if cover < 0.7:
             return refusal(f"fee question but no amount for this fee (coverage {cover:.2f})")
     # A rate question answered by text with no rate in it means the rate is not published.
     if fr.rate_q and re.search(r"\b(rate|apr|apy|interest)\b", fr.norm) and "%" not in text \
@@ -525,14 +570,19 @@ class Answerer:
             d = H.event_answer(view, fr)
             if d is not None:
                 return d
-        if "count" in it or re.search(r"\bhow big\b", fr.norm):
+        if "count" in it or re.search(r"\b(how big|how large|assets)\b", fr.norm):
             d = H.stat_answer(view, fr)
             if d is not None:
                 return d
         d = H.fee_answer(view, fr)
         if d is not None:
             return d
-        if fr.family and (fr.rate_q or fr.pct_in_q):
+        fee_q = bool(re.search(r"\bfees?\b", fr.norm)) or (bool(re.search(r"\b(charges?|cost)\b", fr.norm)) and not fr.rate_q)
+        if fr.family and (fr.rate_q or fr.pct_in_q) and not fee_q and not fr.asks_other:
+            if fr.change_q and view.idx == len(self.kb.views) - 1:
+                d = change_answer(self.kb, view, fr)
+                if d is not None:
+                    return d
             d = rates_answer(view, fr)
             if d is not None:
                 return d
