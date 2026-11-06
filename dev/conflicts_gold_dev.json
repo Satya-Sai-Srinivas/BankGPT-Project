@@ -1,0 +1,17 @@
+[
+ {"id":"g-auto60","topic_keywords":["60-month","auto"],"values":["5.34%","5.39%"],"correct_value":"5.39%"},
+ {"id":"g-auto84","topic_keywords":["84-month","auto"],"values":["5.54%","5.59%"],"correct_value":"5.59%"},
+ {"id":"g-mort30","topic_keywords":["30-year","mortgage"],"values":["6.037%","7.29%"],"correct_value":"7.29%"},
+ {"id":"g-mort100k","topic_keywords":["30-year","100,000"],"values":["6.375%","7.13%"],"correct_value":"7.13%"},
+ {"id":"g-checking","topic_keywords":["checking"],"values":["3.00%","2.50%"],"correct_value":"2.50%"},
+ {"id":"g-branches","topic_keywords":["branch"],"values":["24","22"],"correct_value":"22"},
+ {"id":"g-forbes","topic_keywords":["forbes"],"values":["fourth","fifth"],"correct_value":"fifth"},
+ {"id":"g-10mojumbo","topic_keywords":["10-month","jumbo"],"values":["3.90%","4.00%"],"correct_value":"4.00%"},
+ {"id":"g-ira10jumbo","topic_keywords":["traditional","jumbo"],"values":["3.90%","4.00%"],"correct_value":"4.00%"},
+ {"id":"g-17mo","topic_keywords":["17-month","certificate"],"values":["3.85%","4.10%"],"correct_value":"4.10%"},
+ {"id":"g-12mo","topic_keywords":["12-month","certificate"],"values":["2.90%","3.40%"],"correct_value":"3.40%"},
+ {"id":"g-platinum","topic_keywords":["platinum"],"values":["13.00%","12.50%"],"correct_value":"12.50%"},
+ {"id":"g-counties","topic_keywords":["counties"],"values":["112","118"],"correct_value":"118"},
+ {"id":"g-mortphone","topic_keywords":["mortgage","phone"],"values":["800-383-1700","800-373-7600"],"correct_value":"800-373-7600"},
+ {"id":"g-sharesav","topic_keywords":["share savings"],"values":["0.20%","0.15%"],"correct_value":"0.15%"}
+]

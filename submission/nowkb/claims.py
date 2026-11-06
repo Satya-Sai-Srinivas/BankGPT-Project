@@ -238,10 +238,10 @@ def extract(pages: dict[str, list[PageVersion]], view_date: date) -> Claims:
 
 
 _STAT_PATTERNS = [
-    ("branches", re.compile(r"(?i)\b(\d{1,3}) (?:full-service )?branch(?: office)?(?: locations| offices|es)\b")),
+    ("branches", re.compile(r"(?i)(?<![\d,.$])\b(\d{1,2}) (?:full-service )?branch(?: office)?(?: locations| offices|es)\b")),
     ("branches", re.compile(r"(?i)\boperates (\d{1,3}) branches\b")),
     ("members", re.compile(r"(?i)membership (?:has grown to|of|tops|exceeds) (?:more than |nearly |over |almost )?(\d{2,3},\d{3})|\b(\d{2,3},\d{3}) members\b|Members:\s*(\d{2,3},\d{3})")),
     ("counties", re.compile(r"(?i)\b(\d{2,3}) counties\b")),
-    ("employees", re.compile(r"(?i)\b(?:over|more than|nearly|almost|has) (\d{3,4}) employees\b")),
+    ("employees", re.compile(r"(?i)\b(?:it has|dupaco has) (?:over|more than|nearly|almost) (\d{3,4}) employees\b")),
     ("assets", re.compile(r"(?i)\$(\d{1,2}(?:\.\d{1,2})?) billion in assets|assets (?:exceeding|of nearly|of more than|of) \$(\d{1,2}(?:\.\d{1,2})?) billion")),
 ]

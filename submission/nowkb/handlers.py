@@ -242,6 +242,8 @@ LINK_STOP = {"link", "url", "use", "see", "should", "find", "page", "website", "
 
 
 def link_answer(view: View, fr: QueryFrame) -> Optional[object]:
+    """Canonical URL for an intent: anchor/target relevance (line context weighted lower) x in-link
+    popularity on current pages; www.dupaco.com targets that are not in the crawl are legacy links."""
     c: Claims = view.claims
     qt = set(tokens(fr.norm)) - LINK_STOP
     if not qt:
@@ -252,13 +254,16 @@ def link_answer(view: View, fr: QueryFrame) -> Optional[object]:
         if not _HOST_OK.match(target):
             continue
         tgt = _clean_target(target)
-        lt = set(tokens(line + " " + anchor)) | set(tokens(" ".join(re.split(r"[/#.\-_]", tgt.split("//", 1)[-1]))))
-        ov = len(qt & lt)
-        if ov == 0:
+        key = canon_url(tgt)
+        if key in ("https://dupaco.com/", "https://dupaco.com"):
             continue
-        s = ov / len(qt)
-        if s > scores[tgt] - 1e-12:
-            scores[tgt] = max(scores[tgt], s)
+        if key.startswith("https://dupaco.com/") and key not in view.pages:
+            continue                               # legacy link to a page that no longer exists
+        at = set(tokens(anchor)) | set(tokens(" ".join(re.split(r"[/#.\-_]", tgt.split("//", 1)[-1]))))
+        lt = set(tokens(line))
+        s = (len(qt & at) + 0.3 * len(qt & (lt - at))) / len(qt)
+        if s > scores[tgt]:
+            scores[tgt] = s
             examples[tgt] = (line, pv)
     if not scores:
         return None
@@ -266,13 +271,12 @@ def link_answer(view: View, fr: QueryFrame) -> Optional[object]:
     best_url, best_s = ranked[0]
     if best_s < 0.5:
         return None
-    urls = [best_url]
-    for u, s in ranked[1:4]:
-        if s >= best_s - 1e-9 and canon_url(u) != canon_url(best_url) and len(urls) < 2:
-            urls.append(u)
     line, pv = examples[best_url]
-    text = f"Use {urls[0]}" + (f" (see also {urls[1]})" if len(urls) > 1 else "") + "."
-    return _draft(text, [(u, view.sid, examples[u][0][:200]) for u in urls] + [(pv.url, view.sid, line[:200])],
+    text = f"Use {best_url}"
+    second = next((u for u, s2 in ranked[1:4] if s2 >= best_s - 1e-9 and canon_url(u) != canon_url(best_url)), None)
+    if second and re.search(r"\bjoin\b", fr.norm):
+        text += f" (more about joining: {second})"
+    return _draft(text + ".", [(best_url, view.sid, line[:200]), (pv.url, view.sid, line[:200])],
                   trace=f"link: score={best_s:.2f}")
 
 
@@ -316,3 +320,25 @@ def eligibility_answer(kb, view: View, fr: QueryFrame) -> Optional[object]:
     if tail:
         text += " " + plain(tail.group(0))
     return _draft(text, srcs, trace="eligibility")
+
+
+# ---------------------------------------------------------------------------------------------
+# Contacting Dupaco / updating account details
+# ---------------------------------------------------------------------------------------------
+def contact_answer(view: View, fr: QueryFrame) -> Optional[object]:
+    if not re.search(r"\b(update|change|correct)\b.*\b(address|phone|email|contact|information|info|name)\b|"
+                     r"\bhow (?:do|can) i (?:contact|reach|call|get in touch)\b|\bcontact (?:dupaco|you|customer service)\b",
+                     fr.norm):
+        return None
+    pvs = view.pages.get("https://dupaco.com/contact") or []
+    mp = main_phone(view)
+    if not pvs or not mp:
+        return None
+    pv = pvs[0]
+    from .text import prose_sentences
+    picks = [s for s in prose_sentences(pv.text) if re.search(r"Contact Us|Shine|call us", s)][:2]
+    text = " ".join(picks) if picks else ""
+    if mp[0] not in text:
+        text += f" You can also call Dupaco at {mp[0]}."
+    text = re.sub(r"\s+", " ", text).strip()
+    return _draft(text, [(pv.url, view.sid, text[:200])], trace="contact")

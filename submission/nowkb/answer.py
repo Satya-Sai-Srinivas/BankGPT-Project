@@ -70,7 +70,7 @@ def select_rows(view: View, fr: QueryFrame, family: str) -> list[tuple[tuple, Fa
         scope = key[0]
         if fr.scope and scope != fr.scope:
             continue
-        if not fr.scope and scope == "business" and not (family == "credit_card" and "list" in fr.intents):
+        if not fr.scope and scope == "business" and not (family == "credit_card" and not re.search(r"\b(platinum|reward)", fr.norm)):
             if any(k[0] == "personal" for k, _ in rows):
                 continue
         if fr.term and q.get("term") and q["term"] != fr.term:
@@ -85,6 +85,11 @@ def select_rows(view: View, fr: QueryFrame, family: str) -> list[tuple[tuple, Fa
             continue
         if family == "ira" and fr.ira and q.get("ira") and q["ira"] != fr.ira:
             continue
+        if family == "credit_card":
+            if "platinum" in fr.norm and "platinum" not in q.get("card", ""):
+                continue
+            if re.search(r"\breward", fr.norm) and "reward" not in q.get("card", ""):
+                continue
         if family in ("mortgage",):
             want = fr.purpose or "purchase"
             if "home equity" in fr.norm and q.get("purpose") == "equity_refinance":
@@ -120,6 +125,7 @@ def _sort_rows(rows: list[tuple[tuple, Fact]]) -> list[tuple[tuple, Fact]]:
         key, f = item
         q = f.quals
         return (
+            0 if q.get("scope", "personal") == "personal" else 1,
             0 if q.get("special") else 1,
             -(q.get("bal") or (0, 0))[0],
             q.get("my_ord", 0),
@@ -176,6 +182,8 @@ def _display_label(f: Fact) -> str:
     if f.family == "credit_card":
         name = q.get("card", "platinum visa").title().replace("Visa", "Visa")
         return name + (" (introductory balance transfer rate)" if q.get("intro") else "")
+    if f.family in ("auto_loan", "personal_loan", "atv_loan", "boat_rv_loan", "home_improvement", "home_equity_loan"):
+        return f"{FAMILY_NAME.get(f.family)} — {lab.split(': ', 1)[-1]}"
     if f.family == "certificate" and not q.get("special"):
         return f"{q.get('term')}-month certificate" + (" (business)" if q.get("scope") == "business" else "")
     if f.family in ("share_savings", "you_name_it", "holiday_club", "money_market", "high_yield", "hsa",
@@ -483,6 +491,9 @@ class Answerer:
             d = rates_answer(view, fr)
             if d is not None:
                 return d
+        d = H.contact_answer(view, fr)
+        if d is not None:
+            return d
         if "eligibility" in it:
             d = H.eligibility_answer(self.kb, view, fr)
             if d is not None:

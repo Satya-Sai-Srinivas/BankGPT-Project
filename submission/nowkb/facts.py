@@ -242,7 +242,7 @@ def table_facts(page: PageVersion, table_counter: list[int]) -> list[Fact]:
                         continue
                     disp = pct_display(c)
                     facts.append(Fact(
-                        key=key, attr=attr, value=vals[0], value2=vals[1] if len(vals) > 1 else None,
+                        key=key, attr=attr, value=vals[0], value2=vals[1] if (len(vals) > 1 and "–" in disp) else None,
                         display=disp, family=family, label=label, quals=q, effective=eff, page=page,
                         row=" | ".join(cells), table_id=tid,
                     ))
@@ -272,6 +272,17 @@ def line_facts(page: PageVersion) -> list[Fact]:
             continue
         pc = first_pct(s)
         if not pc:
+            continue
+        rng = re.search(r"(\d{1,2}\.\d{2})%\s*(?:APR\s*)?(?:to|-|–)\s*(\d{1,2}\.\d{2})%\s*APR", norm_dashes(s))
+        if fam == "credit_card" and rng and page.ptype in ("product", "rate_sheet", "landing"):
+            q = _quals(s, [], fam, page.url)
+            q["card"] = ("business " if q.get("scope") == "business" else "") + ("rewards visa" if "reward" in s.lower() else "platinum visa")
+            if re.search(r"\bintro", s, re.I) and not re.search(r"(?i)standard|revert|after that|ongoing", s):
+                continue
+            q.pop("intro", None)
+            out.append(Fact(key=key_of(fam, q), attr="apr", value=float(rng.group(1)), value2=float(rng.group(2)),
+                            display=f"{rng.group(1)}% – {rng.group(2)}%", family=fam, label=s[:80], quals=q,
+                            effective=parse_date(s) or eff, page=page, row=s, primary=False))
             continue
         kv = _KV.match(s)
         q = _quals(s, [], fam, page.url)
