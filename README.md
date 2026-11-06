@@ -42,7 +42,7 @@ The held-out split scored 0.965 at first look. One general fix (negation such as
 | Variant | Score | What it shows |
 |---|---|---|
 | Full system | 0.969 / 1.000 / 1.000 | |
-| Retrieval only (no structured handlers) | 0.489 / 0.521 / 0.524 | The rate engine and the claim handlers carry the score; plain RAG also repeats stale values (4 trap hits) |
+| Retrieval only (no structured handlers) | 0.489 / 0.537 / 0.594 | The rate engine and the claim handlers carry the score; plain RAG also repeats stale values (4 trap hits) |
 | Naive resolution ("most recently fetched wins", no authority ladder) | 0.954 / 0.984 / 0.965 | Stale values start leaking (1 trap hit per set) and conflict F1 drops |
 
 Reproduce with `NOWKB_ABLATE=handlers` or `NOWKB_ABLATE=resolution`.
