@@ -470,9 +470,11 @@ def _year_series(kb: KnowledgeBase, view: View, fr: QueryFrame, text: str, weigh
 
 # =============================================================================================
 class Answerer:
-    def __init__(self, kb: KnowledgeBase) -> None:
+    def __init__(self, kb: KnowledgeBase, composer=None) -> None:
         self.kb = kb
         self.cache: dict[tuple, Draft] = {}
+        from . import llm
+        self.composer = composer if composer is not None else (llm.Composer() if llm.enabled() else None)
 
     def answer(self, question: str, as_of: Optional[str] = None) -> Draft:
         view = self.kb.view_for(as_of)
@@ -482,7 +484,12 @@ class Answerer:
         ck = (re.sub(r"\s+", " ", (question or "").strip().lower()), view.idx)
         if ck in self.cache:
             return self.cache[ck]
-        d = self._route(view, fr)
+        try:
+            d = self._route(view, fr)
+        except Exception as e:  # never crash the harness: degrade to an honest refusal
+            d = refusal(f"internal error {type(e).__name__}: {e}")
+        if self.composer is not None and d.trace and d.trace[0].startswith(("generic", "refuse: weak")):
+            d = self._llm_rewrite(view, fr, d)
         d = guard(d, fr, view)
         if view.idx != len(self.kb.views) - 1 and d.confident:
             d.text = f"As of {fmt_date(view.taken_on)} (the website as it stood then): {d.text}"
@@ -533,6 +540,38 @@ class Answerer:
         if fr.salient and fr.rate_q:
             return refusal(f"rate for unpublished product variant {fr.salient}")
         return generic_answer(self.kb, view, fr)
+
+
+def _llm_evidence(kb: KnowledgeBase, view: View, fr: QueryFrame):
+    from .llm import Evidence
+    q_toks = tokens(fr.norm)
+    hits = kb.index.search(q_toks, view.idx, k=6, prior=_prior(fr))
+    return [Evidence(eid=f"E{i + 1}", url=ch.versions[view.idx].url, text=plain(ch.text)) for i, (_, ch) in enumerate(hits)]
+
+
+def _stale_values(view: View) -> set:
+    out = set()
+    for attrs in view.by_key.values():
+        for obs in attrs.values():
+            if obs and obs[0].page.tier1:
+                out |= {f.display for f in obs[1:] if f.vkey != obs[0].vkey and f.display != obs[0].display}
+    return out
+
+
+def _llm_rewrite_impl(self, view: View, fr: QueryFrame, d: Draft) -> Draft:
+    res = self.composer.compose(fr.raw, _llm_evidence(self.kb, view, fr), _stale_values(view))
+    if res is None:
+        return d
+    if res["status"] == "not_listed":
+        r = refusal("llm: not listed")
+        r.trace.append("llm")
+        return r
+    out = Draft(text=res["answer"], sources=[(e.url, view.sid, e.text[:200]) for e in res["evidence"]])
+    out.trace = ["llm: composed from " + ",".join(e.eid for e in res["evidence"])] + d.trace
+    return out
+
+
+Answerer._llm_rewrite = _llm_rewrite_impl
 
 
 _META = re.compile(r"(?i)\b(in these facts|based on the (?:provided )?(?:context|facts|information)|according to the context)\b")

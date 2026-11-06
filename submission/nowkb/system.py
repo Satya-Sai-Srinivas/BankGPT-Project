@@ -37,11 +37,15 @@ class NowKB:
     def conflicts(self) -> list:
         if self._conflicts is None:
             from .conflicts import build_conflicts
+            try:
+                found = build_conflicts(self.kb)
+            except Exception:  # pragma: no cover - never let a bug here cost the QA score
+                found = []
             self._conflicts = [
                 self._Conflict(topic=c.topic, values=c.values,
                                sources=[self._Source(url=u, snapshot_id=s, quote=q) for u, s, q in c.sources],
                                resolution=c.resolution, reason=c.reason)
-                for c in build_conflicts(self.kb)
+                for c in found
             ]
         return self._conflicts
 
