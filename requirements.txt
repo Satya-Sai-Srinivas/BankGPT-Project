@@ -1,0 +1,4 @@
+# NowKB needs only the Python standard library (3.9+; graded on 3.11).
+# Optional extras:
+#   requirements-llm.txt  -> enables the opt-in Claude layer (NOWKB_LLM=1 + ANTHROPIC_API_KEY)
+#   pytest                -> developer tests (tests/)

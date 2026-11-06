@@ -40,8 +40,15 @@ class View:
         return obs[0] if obs else None
 
 
+import os
+
+ABLATE = set(filter(None, os.getenv("NOWKB_ABLATE", "").split(",")))   # dev-only switches for the README ablations
+
+
 def rank(f: Fact) -> tuple:
     p = f.page
+    if "resolution" in ABLATE:      # naive: most recently fetched observation wins
+        return (p.fetched, p.key)
     return (
         1 if (p.tier1 and f.primary) else 0,
         f.effective or date.min,

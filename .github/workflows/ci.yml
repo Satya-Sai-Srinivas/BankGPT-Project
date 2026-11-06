@@ -1,0 +1,34 @@
+name: ci
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install (clean environment, as graders do)
+        run: pip install -r requirements.txt && pip install pytest
+      - name: Public eval (unpacks snapshots on first run)
+        run: python harness/run_eval.py --submission submission --eval eval/public_eval.jsonl --out results/public
+      - name: Unit + integration tests
+        run: python -m pytest -q
+      - name: Dev and held-out sets, with dev conflict gold
+        run: |
+          python harness/run_eval.py --submission submission --eval dev/dev_eval.jsonl --conflicts-gold dev/conflicts_gold_dev.json --out results/dev
+          python harness/run_eval.py --submission submission --eval dev/dev_test.jsonl --out results/test
+      - name: Regression gate
+        run: |
+          python - <<'PY'
+          import json
+          for name, floor in (("public", 0.95), ("dev", 0.95), ("test", 0.95)):
+              r = json.load(open(f"results/{name}/report.json"))
+              print(name, r["qa_score"], "traps", r["stale_trap_hits"], "p95", r["speed"]["p95_s"])
+              assert r["qa_score"] >= floor and r["stale_trap_hits"] == 0 and r["errors"] == 0
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-results
+          path: results/

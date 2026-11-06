@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from .facts import Fact
-from .kb import KnowledgeBase, View
+from .kb import ABLATE, KnowledgeBase, View
 from .lexicon import EXPANSIONS, FAMILY_KIND, FAMILY_NAME
 from .pages import TIER1, PageVersion
 from .query import QueryFrame, kind, parse
@@ -54,6 +54,9 @@ def _current_keys(view: View, families: list[str]) -> list[tuple[tuple, Fact]]:
         out.append((key, w))
     kept = []
     for key, w in out:
+        if "resolution" in ABLATE:
+            kept.append((key, w))
+            continue
         if not (w.page.tier1 and w.primary):
             if key[1] in tier1_fams or w.page.ptype in ("calculator", "campaign", "landing", "expired"):
                 continue
@@ -498,6 +501,9 @@ class Answerer:
 
     def _route(self, view: View, fr: QueryFrame) -> Draft:
         from . import handlers as H
+        from .kb import ABLATE
+        if "handlers" in ABLATE:        # retrieval-only baseline
+            return generic_answer(self.kb, view, fr)
         it = fr.intents
         if "link" in it or (re.search(r"\bonline\b", fr.norm) and re.search(r"\b(join|apply|open|sign up|enroll)\b", fr.norm)):
             d = H.link_answer(view, fr)
