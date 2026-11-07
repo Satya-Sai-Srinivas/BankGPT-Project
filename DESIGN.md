@@ -139,6 +139,21 @@ The hidden set rewords the public questions, so routing must not depend on one p
 public questions' own must and must-not lists, plus 27 probes. The rewordings scored 0.91 before the
 changes below and 1.0 after; the set is a dev set, since the fixes were made while looking at it.
 
+`dev/stress_eval.jsonl` (150 items) was written afterwards by an author who saw only the brief, the
+public set and the snapshots, never the code. Its first run scored 0.875 with 3 trap hits. Each failure
+it exposed was fixed with a general rule, and it now scores 0.965 with none:
+
+- "the 17-month special (the regular one, not the jumbo)": *regular* next to *special* means non-jumbo.
+- "all the Visa cards, personal and business": both scopes.
+- "a domestic wire … and an international one": one fee row per qualifier.
+- "How many employees used VTO in 2024?": only that year's figure.
+- A running total restated in a newer release ("over $2.7 million" → "over $3.2 million"): the newer
+  page wins, as for branch counts.
+- "Members: 182,627" in a PDF's financial-strength table (as of May 31, 2026) is a dated statistic too,
+  newer than the "179,000 members" release.
+- "Which web page shows the current certificate rates?": *current* no longer steers the link handler to
+  "Current loan rates".
+
 The rewordings that used to fail had four causes:
 
 - **No rate word.** "17-month certificate special", "What's the 10-month jumbo special now?" and "What
@@ -174,6 +189,18 @@ The site does not publish the answer when either of these holds:
   Thanksgiving?", which used to quote a mortgage release. A common word missing from the passage, like
   "took" in "how many staff took volunteer time off", does not trigger it. Calibration: every correct
   generic answer in the public, dev and reworded sets passes.
+
+- **A rate only an article mentions.** Rates quoted in blog, newsroom or business-resource prose are not
+  rate quotes. A rate question about a product that no official page prices is refused. Examples:
+  - private student loans, which the site only discusses;
+  - the Mortgage Rate Relief program after it left the rate sheet. A campaign page and a press release
+    still quote it.
+- **Hours the site does not have.** These are refused:
+  - holiday hours (no schedule has holiday entries);
+  - hours for a branch name that is not in the directory ("Davenport").
+
+  A branch with a past closure announcement is answered with the closure: "The Hy-Vee branch closed on
+  March 31, 2026."
 
 Branches known only by name (Mullan Ave) have no hours, so hours questions about them are refused. The
 refusal text contains no digits and sets `confident=False`.
@@ -231,6 +258,13 @@ So 13 of 15 is the reachable recall.
   mentioned without numbers unless asked about.
 - **dup-005.** "Read back all certificate rates" can only score under `--judge`, which caps the public
   score at 0.969.
+- **Stress-set items still missed (6 of 150).** None is a trap hit:
+  - **Rewards Visa redemption maximum.** The site prints the maximum as "$1,00.00".
+  - **Achieve Money Market intro rate.** It appears only in a promo banner, not in a rate table.
+  - **"How can I get the HSA fee waived?"** The crude stemmer does not equate "waived" with "waive".
+  - **A Home$tart rewording.** It picks a quote sentence over the "$15,000" sentence.
+  - **Two college-loan rewordings.** The answer names the partner (CU Student Choice) but not the
+    words "student loan".
 - **Known gold quirks we did not chase:**
   - dup-011's expected "15-year 6.25%" is really the HELOC rate.
   - dup-016 lists the stale `/switch-and-earn` as a source.

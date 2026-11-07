@@ -2,11 +2,18 @@
 
 **Submission folder:** `submission/` (`submission/solution.py` → `build()`).
 **API keys:** none required. **Extra packages:** none (standard library only). Python 3.9+. The CI workflow
-(`.github/workflows/ci.yml`) runs the evals and tests on Python 3.11, the graders' version.
+(`.github/workflows/ci.yml`) runs on Python 3.11, the graders' version. It runs:
+
+- the harness self-test;
+- the unit tests;
+- the real-data evals, when the snapshots are present.
 
 ```bash
 python harness/run_eval.py --submission submission --eval eval/public_eval.jsonl
 ```
+
+The website snapshots are not in this repository; they were shared for the event only. Put the kit's
+snapshot zips in `snapshots_zip/` (or the unpacked folders in `snapshots/`) to run the evals.
 
 ## How it works
 
@@ -91,6 +98,7 @@ hard-timed-out at 4 s. It is unit-tested with a stub client but **was not measur
 | Dev rewordings / as-of / changes (57) | **1.000** | 0 | < 0.05 s |
 | Held-out (26) | **1.000** | 0 | < 0.05 s |
 | Reworded public questions + probes (128) | **1.000** | 0 | < 0.05 s |
+| Independent stress set (150) | **0.965** (0.875 on first run) | 0 (3 on first run) | < 0.05 s |
 | Harness self-test | **1.000** | 0 | conflict F1 1.0 |
 
 - **Public:** 0.969 is the ceiling without `--judge`; dup-005 has no `must_include`, so it can only score
@@ -99,6 +107,17 @@ hard-timed-out at 4 s. It is unit-tested with a stub client but **was not measur
   seeing it.
 - **Rewordings:** the 101 rewordings scored 0.91 before routing stopped depending on rate words and
   exact phrasings.
+- **Stress set:** written from the snapshots by an author who never saw the code. Its first run exposed
+  the following gaps, each fixed with a general rule:
+  - "regular" next to "special";
+  - personal plus business scope;
+  - two fee qualifiers in one question;
+  - a year named in the question;
+  - newer restatements of running totals;
+  - rates mentioned only in articles;
+  - holiday hours and unknown branches.
+
+  The 6 items it still misses are listed in DESIGN.md.
 - **Conflicts:** against the 15-item dev gold, 13 are matched (two gold items occur in no crawl), the
   right winner is picked for 87%, and F1 is 0.54 with 33 entries.
 - **Ingest:** about 3.5 s for all five snapshots.

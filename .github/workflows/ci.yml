@@ -10,21 +10,40 @@ jobs:
           python-version: "3.11"
       - name: Install (clean environment, as graders do)
         run: pip install -r requirements.txt && pip install pytest
+      - name: Harness self-test (the kit's synthetic snapshots)
+        run: python harness/run_eval.py --submission submission --snapshots harness/selftest/snapshots --eval harness/selftest/eval.jsonl --conflicts-gold harness/selftest/conflicts_gold.json --out results/selftest
+      - name: Detect the website snapshots (shared for the event only, not in this repository)
+        id: snaps
+        run: |
+          if ls snapshots_zip/*.zip >/dev/null 2>&1 || ls -d snapshots/0*/ >/dev/null 2>&1; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Website snapshots are not in this repository; real-data evals are skipped."
+          fi
       - name: Public eval (unpacks snapshots on first run)
+        if: steps.snaps.outputs.present == 'true'
         run: python harness/run_eval.py --submission submission --eval eval/public_eval.jsonl --out results/public
-      - name: Unit + integration tests
+      - name: Unit + integration tests (real-snapshot tests skip without the data)
         run: python -m pytest -q
-      - name: Dev, held-out and reworded sets, with dev conflict gold
+      - name: Dev, held-out, reworded and stress sets, with dev conflict gold
+        if: steps.snaps.outputs.present == 'true'
         run: |
           python harness/run_eval.py --submission submission --eval dev/dev_eval.jsonl --conflicts-gold dev/conflicts_gold_dev.json --out results/dev
           python harness/run_eval.py --submission submission --eval dev/dev_test.jsonl --out results/test
           python harness/run_eval.py --submission submission --eval dev/reword_eval.jsonl --out results/reword
+          python harness/run_eval.py --submission submission --eval dev/stress_eval.jsonl --out results/stress
       - name: Regression gate
         run: |
           python - <<'PY'
-          import json
-          for name, floor in (("public", 0.95), ("dev", 0.95), ("test", 0.95), ("reword", 0.95)):
-              r = json.load(open(f"results/{name}/report.json"))
+          import json, os
+          floors = {"selftest": 1.0, "public": 0.95, "dev": 0.95, "test": 0.95, "reword": 0.95, "stress": 0.9}
+          for name, floor in floors.items():
+              path = f"results/{name}/report.json"
+              if not os.path.exists(path):
+                  print(name, "skipped (no snapshots)")
+                  continue
+              r = json.load(open(path))
               print(name, r["qa_score"], "traps", r["stale_trap_hits"], "p95", r["speed"]["p95_s"])
               assert r["qa_score"] >= floor and r["stale_trap_hits"] == 0 and r["errors"] == 0
           PY

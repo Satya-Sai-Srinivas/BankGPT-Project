@@ -10,16 +10,36 @@ and an honest "I don't know"**, can answer **as the site stood on any date**, an
 python harness/run_eval.py --submission submission --eval eval/public_eval.jsonl
 ```
 
+**The website snapshots are not in this repository.** They were shared for the event only. To run the
+evals, put the kit's five snapshot zips in `snapshots_zip/`, or the unpacked folders in `snapshots/`; the
+scorer unpacks the zips on its first run. Without them, CI runs the harness self-test and the unit tests.
+
 No API keys and no third-party packages are needed (standard library only). See [NOTES.md](NOTES.md) for
 the short version and [DESIGN.md](DESIGN.md) for the rules.
 
 ## Results
 
-| | Public (40) | Dev (57) | Held-out (26) | Reworded + probes (128) | Harness self-test |
-|---|---|---|---|---|---|
-| Starter | 0.093 | | | | |
-| **NowKB QA score** | **0.969** (ceiling) | **1.000** | **1.000** | **1.000** | **1.000**, conflict F1 1.0 |
-| Stale-value trap hits | 0 | 0 | 0 | 0 | 0 |
+| Set | Items | QA score | Stale-value trap hits |
+|---|---|---|---|
+| Starter on public | 40 | 0.093 | |
+| **Public** | 40 | **0.969** (the ceiling without `--judge`) | 0 |
+| Dev | 57 | 1.000 | 0 |
+| Held-out | 26 | 1.000 | 0 |
+| Reworded public questions + probes | 128 | 1.000 | 0 |
+| Independent stress set | 150 | 0.965 (0.875 on first run) | 0 (3 on first run) |
+| Harness self-test | 5 | 1.000, conflict F1 1.0 | 0 |
+
+**Stress set:** `dev/stress_eval.jsonl` was written from the snapshots by an author who never saw the
+code. It covers:
+
+- rewordings of all 40 public questions;
+- `as_of` questions in every snapshot;
+- facts that changed between crawls;
+- facts the site does not publish;
+- new topics.
+
+Its first run (0.875, 3 trap hits) exposed routing and refusal gaps, which were fixed with general rules
+(DESIGN.md sections 4 and 5). The six items it still misses are listed in DESIGN.md section 7.
 
 **Runtime:** about 3.5 s to ingest all 5 snapshots; p95 answer latency under 50 ms, so the speed pillar
 gets full marks. **Consistency:** 1.0 for paraphrase groups and 1.0 for repeats.
@@ -112,11 +132,11 @@ stub-tested only (no key was available during development), so it is not part of
 submission/solution.py        build() for the harness (imports the harness contract types)
 submission/nowkb/             normalize, pages, facts, kb (views + resolution), claims, index, query,
                               answer (router, rates, generic, guard), handlers, conflicts, llm, cli, system
-tests/                        59 pytest tests: parsing, resolution, as_of, conflicts, refusals, determinism,
+tests/                        73 pytest tests: parsing, resolution, as_of, conflicts, refusals, determinism,
                               latency, reworded questions, harness self-test, LLM stub
 dev/                          dev and held-out sets (make_dev_set.py), reword_eval.jsonl (rewordings + probes),
-                              dev conflict gold, analyze.py, probe.py
-harness/ eval/ starter/ snapshots_zip/   the kit, unmodified
+                              stress_eval.jsonl (independent), dev conflict gold, analyze.py, probe.py
+harness/ eval/ starter/       the kit, unmodified (the snapshot zips are not included)
 ```
 
 ## Developer workflow
@@ -130,4 +150,4 @@ PYTHONPATH=submission:harness python -m nowkb.cli ask "What was the 12-month CD 
 PYTHONPATH=submission:harness python -m nowkb.cli report    # results/conflicts_report.md
 ```
 
-The website data is shared for this event only. Keep this repository private.
+The website data was shared for this event only and is not part of this repository.

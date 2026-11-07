@@ -7,3 +7,4 @@ snapshots/0*/
 .venv/
 *.egg-info/
 .pytest_cache/
+snapshots_zip/
