@@ -14,15 +14,16 @@ jobs:
         run: python harness/run_eval.py --submission submission --eval eval/public_eval.jsonl --out results/public
       - name: Unit + integration tests
         run: python -m pytest -q
-      - name: Dev and held-out sets, with dev conflict gold
+      - name: Dev, held-out and reworded sets, with dev conflict gold
         run: |
           python harness/run_eval.py --submission submission --eval dev/dev_eval.jsonl --conflicts-gold dev/conflicts_gold_dev.json --out results/dev
           python harness/run_eval.py --submission submission --eval dev/dev_test.jsonl --out results/test
+          python harness/run_eval.py --submission submission --eval dev/reword_eval.jsonl --out results/reword
       - name: Regression gate
         run: |
           python - <<'PY'
           import json
-          for name, floor in (("public", 0.95), ("dev", 0.95), ("test", 0.95)):
+          for name, floor in (("public", 0.95), ("dev", 0.95), ("test", 0.95), ("reword", 0.95)):
               r = json.load(open(f"results/{name}/report.json"))
               print(name, r["qa_score"], "traps", r["stale_trap_hits"], "p95", r["speed"]["p95_s"])
               assert r["qa_score"] >= floor and r["stale_trap_hits"] == 0 and r["errors"] == 0

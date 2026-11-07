@@ -15,18 +15,27 @@ the short version and [DESIGN.md](DESIGN.md) for the rules.
 
 ## Results
 
-| | Public (40) | Dev (57) | Held-out (26) | Harness self-test |
-|---|---|---|---|---|
-| Starter | 0.093 | | | |
-| **NowKB QA score** | **0.969** (ceiling) | **1.000** | **1.000** | **1.000**, conflict F1 1.0 |
-| Stale-value trap hits | 0 | 0 | 0 | 0 |
+| | Public (40) | Dev (57) | Held-out (26) | Reworded + probes (128) | Harness self-test |
+|---|---|---|---|---|---|
+| Starter | 0.093 | | | | |
+| **NowKB QA score** | **0.969** (ceiling) | **1.000** | **1.000** | **1.000** | **1.000**, conflict F1 1.0 |
+| Stale-value trap hits | 0 | 0 | 0 | 0 | 0 |
 
-**Runtime:** about 3 s to ingest all 5 snapshots; p95 answer latency under 50 ms, so the speed pillar
+**Runtime:** about 3.5 s to ingest all 5 snapshots; p95 answer latency under 50 ms, so the speed pillar
 gets full marks. **Consistency:** 1.0 for paraphrase groups and 1.0 for repeats.
 
-**Conflicts pillar:** against a 15-item dev gold reconstructed from the public traps and verified page
-diffs, recall is 0.80 and the right winner is picked 80% of the time. The real gold is hidden, so this is
-only a sanity check.
+**Rewordings:** the 101 rewordings of the public questions in `dev/reword_eval.jsonl` scored 0.91 (paraphrase
+consistency 0.84) before routing stopped depending on rate words and on exact handler phrasings; see
+DESIGN.md section 4.
+
+**Conflicts pillar:** 33 entries. The dev gold has 15 items, reconstructed from the public traps and
+verified page diffs; two of them do not occur in any crawl. Against it:
+
+- 13 of 15 are matched;
+- the right winner is picked for 87%;
+- F1 is 0.54.
+
+The real gold is hidden, so this is only a sanity check.
 
 **How the dev and held-out sets were built:** they were written by hand from the snapshots:
 
@@ -61,9 +70,10 @@ ingest(snapshot)
 answer(q, as_of)
   view             latest snapshot ≤ as_of
   QueryFrame       product, term, tier, amount, model year, intent, salient qualifiers
-  router           links ▸ routing ▸ hours ▸ address ▸ closures ▸ stats ▸ fees ▸ contact ▸ rates ▸ eligibility ▸ generic
+  router           links ▸ routing ▸ phones ▸ hours ▸ address ▸ closures ▸ stats ▸ awards ▸ fees ▸ rates
+                   (incl. product questions with no rate word) ▸ contact ▸ eligibility ▸ generic
   render           only from resolved winners, values verbatim
-  guard            digit-free refusals, no artefacts
+  guard            off-topic evidence → "I don't know"; digit-free refusals, no artefacts
   cache
 
 conflicts()        one per fact key, all observed values, winner + reason, ranked and cut for F1
@@ -80,8 +90,12 @@ Design choices that matter most:
   regular 10-month special.
 - **Organisation facts use the newest dated statement, never the majority.** The outdated "23 branches"
   appears on more pages than the correct 22.
+- **Routing survives rewording.** The hidden set rewords the public questions. A product question
+  without a rate word ("17-month certificate special") still reaches the rate engine. Member wording maps
+  to the fee schedule's wording (a cashier's check is an "Official check").
 - **Refusals are strict and digit-free.** A question naming a variant that no table carries gets "I don't
-  know". Examples: the 7/1 ARM, a construction-loan rate, a 9-month CD, an unknown branch's hours.
+  know". Examples: the 7/1 ARM, a construction-loan rate, a 9-month CD, an unknown branch's hours. So
+  does a question whose only evidence is off-topic ("What is Dupaco's SWIFT code?").
 - **The answer path is deterministic and pure in-memory.** That makes consistency and speed structural
   properties of the design rather than something to tune.
 
@@ -98,9 +112,10 @@ stub-tested only (no key was available during development), so it is not part of
 submission/solution.py        build() for the harness (imports the harness contract types)
 submission/nowkb/             normalize, pages, facts, kb (views + resolution), claims, index, query,
                               answer (router, rates, generic, guard), handlers, conflicts, llm, cli, system
-tests/                        32 pytest tests: parsing, resolution, as_of, conflicts, refusals, determinism,
-                              latency, harness self-test, LLM stub
-dev/                          dev and held-out sets (make_dev_set.py), dev conflict gold, analyze.py, probe.py
+tests/                        59 pytest tests: parsing, resolution, as_of, conflicts, refusals, determinism,
+                              latency, reworded questions, harness self-test, LLM stub
+dev/                          dev and held-out sets (make_dev_set.py), reword_eval.jsonl (rewordings + probes),
+                              dev conflict gold, analyze.py, probe.py
 harness/ eval/ starter/ snapshots_zip/   the kit, unmodified
 ```
 

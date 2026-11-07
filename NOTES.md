@@ -1,7 +1,8 @@
 # NOTES — NowKB
 
 **Submission folder:** `submission/` (`submission/solution.py` → `build()`).
-**API keys:** none required. **Extra packages:** none (standard library only). Python 3.9+; tested on 3.11 in CI.
+**API keys:** none required. **Extra packages:** none (standard library only). Python 3.9+. The CI workflow
+(`.github/workflows/ci.yml`) runs the evals and tests on Python 3.11, the graders' version.
 
 ```bash
 python harness/run_eval.py --submission submission --eval eval/public_eval.jsonl
@@ -17,10 +18,18 @@ facts. For every snapshot it then picks one winning value per key. Answers are r
 winners, so a stale number has no path into an answer. The values that lost are kept: they feed
 `conflicts()` and the unscored `conflict_note`, which explains what was overridden.
 
-Branches, hours, closures, organisation statistics, fees, routing and phone numbers, and canonical links
-come from dedicated extractors. Anything else is answered from a snapshot-aware BM25F index by choosing
-the best supporting sentences. Answers take a few milliseconds. Repeats come from a cache, and questions
-that parse to the same product and qualifiers get the same rendering, so consistency is structural.
+Branches, hours, closures, organisation statistics, award counts, fees, routing and department phone
+numbers, and canonical links come from dedicated extractors. Anything else is answered from a
+snapshot-aware BM25F index by choosing the best supporting sentences. Answers take a few milliseconds.
+Repeats come from a cache, and questions that parse to the same product and qualifiers get the same
+rendering, so consistency is structural.
+
+Routing does not depend on one phrasing. Two examples:
+
+- A product question with no rate word still goes to the rate engine when it names a variant or asks
+  for the product list ("17-month certificate special", "What credit cards do you offer?").
+- Fee questions use the member's words: a "cashier's check" is the schedule's "Official check", and an
+  "outgoing wire" is the domestic or international wire.
 
 ## How "current" is decided
 
@@ -43,10 +52,13 @@ that parse to the same product and qualifiers get the same rendering, so consist
    together but now disagree are flagged, e.g. the Traditional IRA 10-month jumbo row lagging its Roth twin.
 4. **Organisation-wide facts** (branch count, counties, members, Forbes "fifth time"): the newest dated
    statement wins, never the majority. The outdated "23 branches" appears on more pages than the correct 22.
-5. **Honesty.** If a question names a variant no table carries (7/1 ARM, construction-loan rate,
-   9-month CD, an unknown branch's hours), or the evidence has no number for a rate or fee question,
-   the answer is "I don't know — that isn't listed on Dupaco's website…" with `confident=False` and
-   no digits.
+5. **Honesty.** The answer is "I don't know — that isn't listed on Dupaco's website…", with
+   `confident=False` and no digits, when any of these holds:
+   - the question names a variant no table carries (7/1 ARM, construction-loan rate, 9-month CD, an
+     unknown branch's hours);
+   - the evidence has no number for a rate or fee question;
+   - retrieval only found an off-topic passage: the question's most specific term is rare on the site
+     and absent from it ("What is Dupaco's SWIFT code?").
 
 ## Conflicts
 
@@ -55,10 +67,12 @@ reason naming the rule that decided. Candidates are ranked by type:
 
 1. a stale copy still visible in the latest crawl;
 2. sibling rows that disagree;
-3. dated organisation-wide claims;
+3. dated organisation-wide claims, and a department extension printed on two phone numbers;
 4. values that changed across crawls.
 
-The list is cut where a candidate is unlikely to be a real contradiction, because the score is F1.
+The list is cut where a candidate is unlikely to be a real contradiction, because the score is F1. It
+also leaves out tables that only repeat another table: the Home Equity Refinance rows mirror the
+refinance rows label for label. That gives 33 entries.
 
 ## Optional LLM layer (off by default)
 
@@ -76,12 +90,17 @@ hard-timed-out at 4 s. It is unit-tested with a stub client but **was not measur
 | Public (40) | **0.969** | 0 | < 0.05 s |
 | Dev rewordings / as-of / changes (57) | **1.000** | 0 | < 0.05 s |
 | Held-out (26) | **1.000** | 0 | < 0.05 s |
+| Reworded public questions + probes (128) | **1.000** | 0 | < 0.05 s |
 | Harness self-test | **1.000** | 0 | conflict F1 1.0 |
 
 - **Public:** 0.969 is the ceiling without `--judge`; dup-005 has no `must_include`, so it can only score
   under the judge.
 - **Held-out:** 0.965 at first look. One general fix, for negation such as "not jumbo", was made after
   seeing it.
-- **Ingest:** about 3 s for all five snapshots.
+- **Rewordings:** the 101 rewordings scored 0.91 before routing stopped depending on rate words and
+  exact phrasings.
+- **Conflicts:** against the 15-item dev gold, 13 are matched (two gold items occur in no crawl), the
+  right winner is picked for 87%, and F1 is 0.54 with 33 entries.
+- **Ingest:** about 3.5 s for all five snapshots.
 
 See `README.md` for ablations and `DESIGN.md` for the rules in detail.

@@ -105,6 +105,19 @@ not conflict. "Last year" questions list both, with their years.
 link answer scores anchor text and target path against the question, weights by in-link count, and
 drops `www.dupaco.com` targets that no longer exist in the crawl, since those are legacy links.
 
+**Department phone numbers.** Every crawl prints the Mortgage Team as "800-383-1700 ext. 204" in the
+jumbo-loan footnote of `/rates` and four mortgage pages. The rest of the site, including the home-loans
+page's own call-to-action, says "800-373-7600, ext. 204", and 800-373-7600 is the number on `/contact`.
+When the same extension appears on two toll-free base numbers, the main line wins. That is used both for
+"what number do I call about a mortgage?" and as a listed contradiction.
+
+**Fee wording.** The fee schedule uses its own names: "Official check" (members say cashier's check),
+and "Domestic wire" and "International wire transfer" (members say outgoing wire). Those synonyms are
+mapped. A question that names a fee without its qualifier ("wire transfer fee") gets every variant that
+has a different amount: incoming $10, domestic $25 and international $55. Fees stated only in prose
+("No annual fee" on the card pages) are found by looking for the sentence that states an amount, or
+that there is none, with its paragraph as context.
+
 ## 3. As-of semantics
 
 `as_of` picks the latest snapshot taken on or before the date: the site as last observed. A page absent
@@ -115,22 +128,57 @@ Effective dates are used to rank pages *within* a view. They are not used to re-
 observation backwards, because effective dates on this site are inconsistent: the Share Savings table
 says 06/15/2026 while its own footnote says 03/03/2026.
 
-A question that embeds a past date ("as of May 2026") with no `as_of` parameter is answered from the
-matching view.
+A question that embeds a past date ("as of May 2026", "How many branches did Dupaco have in May 2026?")
+with no `as_of` parameter is answered from the matching view. "Has it gone up since May?" is a change
+question instead: it lists the value in every crawl where it changed.
 
-## 4. Refusals
+## 4. Routing reworded questions
+
+The hidden set rewords the public questions, so routing must not depend on one phrasing.
+`dev/reword_eval.jsonl` holds 101 natural rewordings of the 40 public questions, scored against the
+public questions' own must and must-not lists, plus 27 probes. The rewordings scored 0.91 before the
+changes below and 1.0 after; the set is a dev set, since the fixes were made while looking at it.
+
+The rewordings that used to fail had four causes:
+
+- **No rate word.** "17-month certificate special", "What's the 10-month jumbo special now?" and "What
+  credit cards do you offer?" fell through to sentence retrieval. The retrieved IRA table then put the
+  stale 3.90% next to 4.00%. A question that names a rate-bearing product plus a variant (term, special,
+  jumbo, model year, balance tier, Roth/Traditional), or asks for the card or certificate list, and asks
+  for nothing else (no fee, hours, how-to, link or eligibility words), now goes to the rate engine.
+- **Handler vocabulary.** These phrasings now reach their handlers:
+  - "what page shows…", "nearest ATM" and "branch locator" go to the link handler;
+  - "what's happening to the Hy-Vee location" goes to closure events;
+  - "has Forbes ranked Dupaco" goes to the newest "Nth time" release;
+  - "membership requirements" goes to eligibility;
+  - "become a member online" goes to the join link.
+- **Fee wording.** See section 2.
+- **Department phones.** See section 2.
+
+## 5. Refusals
 
 The site does not publish the answer when either of these holds:
 
 - **A named variant no table carries.** Every salient qualifier in the question must be satisfied by a
-  row. Examples: 7/1 ARM, FHA, construction, 9-month CD, 60-month jumbo CD.
+  row. Examples: 7/1 ARM, FHA, construction, 9-month CD, 60-month jumbo CD, 12-month IRA certificate.
 - **Evidence without the number asked for.** A rate question whose best evidence has no `%`, or a fee
-  question whose best `$` sentence does not mention the fee asked about.
+  question whose best `$` sentence does not mention the fee asked about. Example: "How much is a lost
+  debit card?"; the fee schedule has no replacement-card line.
+- **Off-topic evidence.** Sentence retrieval always finds *something*. The answer is refused when all
+  three of these hold:
+  - the question's most specific term appears on at most 3 passages site-wide;
+  - that term is absent from the passage that was picked;
+  - the passage covers less than half of the question (idf-weighted).
+
+  Examples: "What is Dupaco's SWIFT code?", which used to quote an alerts page, and "Is Dupaco closed on
+  Thanksgiving?", which used to quote a mortgage release. A common word missing from the passage, like
+  "took" in "how many staff took volunteer time off", does not trigger it. Calibration: every correct
+  generic answer in the public, dev and reworded sets passes.
 
 Branches known only by name (Mullan Ave) have no hours, so hours questions about them are refused. The
 refusal text contains no digits and sets `confident=False`.
 
-## 5. Conflicts
+## 6. Conflicts
 
 Candidates are generated per fact key across all views, and every observed value is kept. In score
 order:
@@ -143,10 +191,14 @@ order:
 | 0.75 | Co-moving sibling | Rows that always matched now disagree |
 | 0.55–0.63 | Changed | The official value changed across crawls |
 | 0.60 | County count | Dated organisation claim |
+| 0.60 | Phone base number | One department extension printed on two toll-free numbers (Mortgage Team ext. 204) |
 
 Scores are then adjusted:
 
-- **Removed:** IRA specials that only mirror a certificate's history.
+- **Removed:**
+  - IRA specials that only mirror a certificate's history.
+  - Rows of the Home Equity Refinance table that repeat a refinance row label for label. Before this
+    rule they produced six entries whose topics could not be told apart from the refinance rows.
 - **Penalised:** business-scope duplicates of personal rows.
 - **Down-weighted:** products no longer listed on the rate sheet.
 
@@ -157,14 +209,23 @@ most specific entry.
 **Topics** include several spellings of the term ("60-month (60 months, 60 month)") and product words,
 for keyword matching.
 
-**The list is cut** below a score of 0.45 and at most 60 entries (38 today). That keeps precision
+**The list is cut** below a score of 0.45 and at most 60 entries (33 today). That keeps precision
 reasonable when the size of the hidden gold list is unknown.
 
-## 6. Trade-offs and limits
+The dev conflict gold (`dev/conflicts_gold_dev.json`) was reconstructed from the public traps. Two of
+its 15 entries do not occur anywhere in the five crawls:
+
+- **Platinum Visa 13.00%.** Every crawl shows 12.50%–19.50%.
+- **Share Savings 0.20% vs 0.15%.** These are two different balance tiers.
+
+So 13 of 15 is the reachable recall.
+
+## 7. Trade-offs and limits
 
 - **Deterministic over generative.** Rules and lexicons are maintainable and testable, but phrasings far
-  outside the lexicon fall back to sentence retrieval. The optional Claude layer exists for those cases;
-  it is gated by a grounding validator and off by default because it could not be measured.
+  outside the lexicon fall back to sentence retrieval, behind the off-topic guard. The optional Claude
+  layer exists for those cases; it is gated by a grounding validator and off by default because it could
+  not be measured.
 - **Minimal answers.** Answers include only numbers that answer the question. Any extra number is a
   potential trap: a 3.00% cash-advance fee would trip a "3% APY" checking trap. The jumbo tier is
   mentioned without numbers unless asked about.
