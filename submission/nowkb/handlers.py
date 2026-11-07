@@ -64,16 +64,53 @@ def _branch_label(b: Branch) -> str:
     return b.city or b.name.split(":")[0]
 
 
+_HOLIDAY = re.compile(r"\b(holidays?|thanksgiving|christmas|new year'?s?|easter|memorial day|labor day|"
+                      r"independence day|july 4(?:th)?|fourth of july|veterans day|presidents'? day|columbus day|"
+                      r"juneteenth|martin luther king|mlk day)\b", re.I)
+_NOT_PLACES = {"dupaco", "dupaco's", "what", "when", "where", "which", "who", "how", "are", "is", "do", "does", "can",
+               "could", "will", "would", "the", "i", "i'm", "iowa", "illinois", "wisconsin", "ia", "il", "wi", "lobby",
+               "drive", "drive-up", "drive-thru", "hours", "branch", "branches", "atm", "please", "tell", "give", "credit",
+               "union", "community", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+               "january", "february", "march", "april", "may", "june", "july", "august", "september", "october",
+               "november", "december", "is", "any", "all", "my", "your", "our", "and", "or", "hi", "hello", "thanks",
+               "show", "list", "find", "get", "need", "want", "looking", "help", "check", "let", "if", "on", "at", "in",
+               "for", "today", "tomorrow", "this", "next", "weekend", "weekday", "weekdays", "us", "we", "you"}
+
+
+def _named_place(raw: str) -> Optional[str]:
+    """A capitalised place name in the question ('Davenport' in "Dupaco's Davenport, Iowa branch")."""
+    for w in re.findall(r"\b[A-Z][A-Za-z'’-]+\b", raw):
+        if w.lower().replace("’", "'") not in _NOT_PLACES:
+            return w
+    return None
+
+
+def _closure(c: Claims, place: str, view: View):
+    """'The Hy-Vee branch closed on March 31, 2026.' for a branch whose closure announcement is past."""
+    for e in c.events:
+        ctx = (e.sentence + " " + e.page.title).lower()
+        if place.lower() in ctx and re.search(r"\b(branch|location|office)\b", ctx) and e.when <= view.taken_on:
+            return _draft(f"The {place} branch closed on {fmt_date(e.when)}.",
+                          [(e.page.url, view.sid, e.sentence[:200])], trace="hours: closed branch")
+    return None
+
+
 def hours_answer(view: View, fr: QueryFrame) -> Optional[object]:
     c: Claims = view.claims
     want_drive = "drive_up" in fr.intents and "lobby" not in fr.intents
     attr = "drive_up" if want_drive else "lobby"
+    if _HOLIDAY.search(fr.raw):
+        return _refuse("holiday hours are not published (the branch schedules have no holiday entries)")
     matches, named = find_branches(c, fr)
+    place = _named_place(fr.raw) if re.search(r"\b(branch|office|location)\b", fr.norm) else None
+    closed = _closure(c, place, view) if place else None
+    if not matches and place:
+        return closed or _refuse(f"no branch named {place} in the branch directory")
     if matches:
         withh = [b for b in matches if getattr(b, attr)]
         if not withh:
             name = matches[0].street or matches[0].city
-            return _refuse(f"branch {name} known but no {attr} hours published")
+            return closed or _refuse(f"branch {name} known but no {attr} hours published")
         b = withh[0]
         sched = getattr(b, attr)
         where = f"{b.city} branch ({b.street.rstrip('.')})" if b.street else f"{b.city} branch"
@@ -150,7 +187,8 @@ def stat_answer(view: View, fr: QueryFrame) -> Optional[object]:
     allowed = set(tokens("many number total current currently now today dupaco branch branches location locations "
                          "office offices member members employee employees staff county counties assets asset big "
                          "operate operates operating physical membership full-service service services have has "
-                         "serve serves run runs open"))
+                         "serve serves run runs open right moment present presently overall altogether exactly "
+                         "approximately roughly total count"))
     content = {t for t in set(tokens(fr.norm)) - allowed - _DATE_WORDS if not re.fullmatch(r"(?:19|20)\d\d", t)}
     if content:
         return None          # "how many employees used Volunteer Time Off" is not an org-size question
@@ -160,9 +198,10 @@ def stat_answer(view: View, fr: QueryFrame) -> Optional[object]:
             if not st:
                 return None
             when = fmt_date(st.when)
+            exact = st.page.ptype == "pdf"         # a dated financial-strength table, not press-release rounding
             phr = {
                 "branches": f"Dupaco has {st.display} branch office locations",
-                "members": f"Dupaco has more than {st.display} members",
+                "members": f"Dupaco has {'' if exact else 'more than '}{st.display} members",
                 "employees": f"Dupaco has over {st.display} employees",
                 "counties": f"Dupaco serves residents in {st.display} counties throughout Iowa, northwest Illinois and southwest Wisconsin",
                 "assets": f"Dupaco has assets exceeding ${st.display} billion",
@@ -170,7 +209,8 @@ def stat_answer(view: View, fr: QueryFrame) -> Optional[object]:
             older = sorted({s.display for s in c.stats.get(name, []) if s.display != st.display})
             note = (f"Older pages state {', '.join(older)}; the most recent dated statement ({st.page.url}, "
                     f"{st.when.isoformat()}) wins.") if older else None
-            return _draft(f"{phr}, according to its most recent press release ({when}).",
+            src = f"its financial-strength figures as of {when}" if exact else f"its most recent press release ({when})"
+            return _draft(f"{phr}, according to {src}.",
                           [(st.page.url, view.sid, st.sentence[:200])], note=note, trace=f"stat: {name}")
     return None
 
@@ -253,7 +293,8 @@ def main_phone(view: View) -> Optional[tuple[str, object]]:
 # ---------------------------------------------------------------------------------------------
 _HOST_OK = re.compile(r"^https?://(?:[\w-]+\.)?dupaco\.com", re.I)
 LINK_STOP = {stem(w) for w in ("link", "url", "use", "see", "should", "find", "page", "website", "web", "site",
-                               "online", "where", "go", "dupaco", "how", "can", "get", "show", "list", "display")}
+                               "online", "where", "go", "dupaco", "how", "can", "get", "show", "list", "display",
+                               "current", "currently", "today", "latest", "now", "right")}   # "Current loan rates" anchors
 
 
 def link_answer(view: View, fr: QueryFrame) -> Optional[object]:
@@ -404,16 +445,21 @@ def fee_answer(view: View, fr: QueryFrame) -> Optional[object]:
     qt = set(tokens(norm)) - FEE_STOP
     if not qt:
         return None
-    distinct = _FEE_QUALIFIERS
+    asked_quals = qt & _FEE_QUALIFIERS
     best = []
     for name, amount, pv in c.fees:
         nt = set(tokens(name))
         if outgoing and "incomi" in nt:
             continue
-        ov = len(qt & nt)
-        if ov == 0 or (qt - nt) & distinct:
+        row_quals = nt & asked_quals
+        if (qt - nt) & _FEE_QUALIFIERS and not row_quals:
             continue          # "Free Checking" must not match "Analysis checking monthly fee"
-        sc = ov / len(qt) - 0.02 * max(0, len(nt) - ov)
+        # "domestic wire ... and an international one": each row answers its own qualifier
+        eff_qt = qt - (asked_quals - row_quals) if row_quals else qt
+        ov = len(eff_qt & nt)
+        if ov == 0:
+            continue
+        sc = ov / len(eff_qt) - 0.02 * max(0, len(nt) - ov)
         if "busine" in nt and "busine" not in qt:
             sc -= 0.05
         best.append((sc, -pv.authority, name, amount, pv))
@@ -423,6 +469,15 @@ def fee_answer(view: View, fr: QueryFrame) -> Optional[object]:
     sc, _, name, amount, pv = best[0]
     if sc < 0.6:
         return None
+    if len(asked_quals) >= 2:
+        rows, seen = [], set()
+        for q in sorted(asked_quals):
+            hit = next((b for b in best if q in set(tokens(b[2])) and b[0] >= 0.6), None)
+            if hit and hit[2] not in seen:
+                seen.add(hit[2])
+                rows.append((hit[2], hit[3], hit[4]))
+        if len(rows) >= 2:
+            return _fee_draft(rows, view, sc)
     # An unqualified question ("wire transfer fee") covers every variant of that fee with a different amount
     # (incoming, domestic, international); a qualified one ("domestic wire") keeps only its own row.
     core = (qt & set(tokens(name))) - _WEAK_FEE_TOKENS
@@ -440,12 +495,14 @@ def fee_answer(view: View, fr: QueryFrame) -> Optional[object]:
         rows.append((n2, a2, p2))
     if len({_amount_key(a) for _, a, _ in rows}) < 2:
         rows = [(name, amount, pv)]
-    rows = rows[:6]
-    eff = re.search(r"(?i)effective ([A-Z][a-z]+\.? \d{1,2}, \d{4})", pv.text)
+    return _fee_draft(rows[:6], view, sc)
+
+
+def _fee_draft(rows: list, view: View, sc: float):
+    eff = re.search(r"(?i)effective ([A-Z][a-z]+\.? \d{1,2}, \d{4})", rows[0][2].text)
     text = "; ".join(f"{n}: {a}" for n, a, _ in rows) + \
         (f" (Rate and Fee Schedule, effective {eff.group(1)})" if eff else "") + "."
-    return _draft(text, [(p.url, view.sid, f"{n} {a}") for n, a, p in rows[:1]] +
-                  [(p.url, view.sid, f"{n} {a}") for n, a, p in rows[1:]], trace=f"fee: {sc:.2f} rows={len(rows)}")
+    return _draft(text, [(p.url, view.sid, f"{n} {a}") for n, a, p in rows], trace=f"fee: {sc:.2f} rows={len(rows)}")
 
 
 # ---------------------------------------------------------------------------------------------

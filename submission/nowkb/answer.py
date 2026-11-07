@@ -36,6 +36,16 @@ def refusal(reason: str, frame: Optional[QueryFrame] = None) -> Draft:
 FAMILY_GROUPS = {
     "checking": ["free_checking", "first_rate_checking"],
 }
+ARTICLE_PAGES = ("blog", "newsroom", "biz_resource", "legal")
+
+
+def has_published_rate(view: View, family: str) -> bool:
+    """Whether an official rate source (the rate sheet or a product page) quotes this product in this view.
+    A program that only survives on a campaign page or in a press release ('Mortgage Rate Relief') or a
+    product the site never prices (student loans) is not published."""
+    fams = set(FAMILY_GROUPS.get(family, [family]))
+    return any(key[1] in fams and any(f.page.tier1 for obs in attrs.values() for f in obs)
+               for key, attrs in view.by_key.items())
 
 
 def _current_keys(view: View, families: list[str]) -> list[tuple[tuple, Fact]]:
@@ -49,6 +59,8 @@ def _current_keys(view: View, families: list[str]) -> list[tuple[tuple, Fact]]:
         w = next((attrs[a][0] for a in ("apy", "apr", "rate", "dividend", "points") if attrs.get(a)), None)
         if w is None:
             continue
+        if w.page.ptype in ARTICLE_PAGES and "resolution" not in ABLATE:
+            continue          # a rate mentioned in an article is not a rate quote ("...0% interest on federal loans")
         if w.page.tier1 and w.primary:
             tier1_fams.add(key[1])
         out.append((key, w))
@@ -71,7 +83,7 @@ def select_rows(view: View, fr: QueryFrame, family: str) -> list[tuple[tuple, Fa
     for key, f in rows:
         q = f.quals
         scope = key[0]
-        if fr.scope and scope != fr.scope:
+        if fr.scope and fr.scope != "both" and scope != fr.scope:
             continue
         if not fr.scope and scope == "business" and not (family == "credit_card" and not re.search(r"\b(platinum|reward)", fr.norm)):
             if any(k[0] == "personal" for k, _ in rows):
@@ -396,6 +408,8 @@ def _sentence_score(s: str, qset: set, idf: dict, fr: QueryFrame, expansions: se
             sc += 0.15
     if fr.rate_q and "%" in s:
         sc += 0.1
+    if "$" in s and re.search(r"\b(?:max(?:imum)?|min(?:imum)?|limit|up to)\b", fr.norm):
+        sc += 0.15         # 'What was the maximum hardship grant?' wants the sentence with the amount
     if re.search(r"\bfees?\b", fr.norm):
         if re.search(r"\bfees?\b", s, re.I) and ("$" in s or re.search(r"(?i)\bno\b[^.]{0,25}\bfees?\b", s)):
             sc += 0.3          # a fee question wants the sentence that states the fee (or that there is none)
@@ -474,12 +488,24 @@ def generic_answer(kb: KnowledgeBase, view: View, fr: QueryFrame) -> Draft:
     rel_df = kb.index.df.get(rel[2], 0)
     if not rel[1] and rel_df <= RARE_DF and rel[3] < MIN_PASSAGE_COVER:
         return refusal(f"off-topic evidence (rarest term {rel[2]!r} df={rel_df} not in passage, cover {rel[3]:.2f})")
-    # Year-qualified statistics reported in several releases are distinct facts: list them all.
-    if _YEAR.search(text) and ("count" in fr.intents or "last year" in fr.norm):
-        series = _year_series(kb, view, fr, text, weights)
-        if series:
-            text = series[0]
-            sources += series[1]
+    # Year-qualified statistics reported in several releases are distinct facts: list them all, unless the
+    # question names the year ("How many employees used VTO in 2024?" must not also say 2023's figure).
+    asked_year = re.search(r"\b(20\d\d)\b", fr.raw)
+    if _YEAR.search(text) and ("count" in fr.intents or "last year" in fr.norm or asked_year):
+        found = _year_series(kb, view, fr, text, weights)
+        if found and asked_year:
+            if asked_year.group(1) in found:
+                s, p = found[asked_year.group(1)]
+                text, sources = s, [(p.url, view.sid, s[:200])]
+        elif found and len(found) >= 2:
+            years = sorted(found, reverse=True)
+            text = " ".join(found[y][0] for y in years)
+            sources += [(found[y][1].url, view.sid, found[y][0][:200]) for y in years]
+    elif re.search(r"\d", text):
+        newer = _newest_statement(kb, view, fr, text, pv, weights)
+        if newer:
+            text, pv = newer
+            sources = [(pv.url, view.sid, text[:200])]
     # A fee question needs an amount that is about *this* fee (not just any "$" on the page).
     if "fee" in fr.intents and (re.search(r"\b(fee|charge|cost)\b", fr.norm) or
                                 (re.search(r"\bhow much (?:is|does)\b", fr.norm) and not fr.rate_q)):
@@ -559,8 +585,8 @@ def _fee_sentence(view: View, hits: list, qset: set, idf: dict, total: float):
     return best[0][0], s, best[2]
 
 
-def _year_series(kb: KnowledgeBase, view: View, fr: QueryFrame, text: str, weights: dict):
-    """Find the same statistic reported for other years (e.g. VTO users in 2023 and 2024)."""
+def _year_series(kb: KnowledgeBase, view: View, fr: QueryFrame, text: str, weights: dict) -> dict:
+    """The same statistic reported for different years (e.g. VTO users in 2023 and 2024): {year: (sentence, page)}."""
     base = set(tokens(re.sub(r"\d[\d,]*", " ", text)))
     found = {}
     for score, ch in kb.index.search(list(weights), view.idx, k=25, weights=weights, prior=_prior(fr)):
@@ -571,11 +597,32 @@ def _year_series(kb: KnowledgeBase, view: View, fr: QueryFrame, text: str, weigh
             st = set(tokens(re.sub(r"\d[\d,]*", " ", s)))
             if len(base & st) / max(1, len(base)) >= 0.5:
                 found.setdefault(ym.group(1), (s, ch.versions[view.idx]))
-    if len(found) < 2:
+    return found
+
+
+def _newest_statement(kb: KnowledgeBase, view: View, fr: QueryFrame, text: str, pv: PageVersion, weights: dict):
+    """A running total restated in later releases ('has distributed over $2.7 million' -> '$3.2 million'):
+    the same sentence with different numbers on a newer dated page wins, as for branch counts."""
+    if not pv.pub_date:
         return None
-    years = sorted(found, reverse=True)
-    text = " ".join(found[y][0] for y in years)
-    return text, [(found[y][1].url, view.sid, found[y][0][:200]) for y in years]
+    first = sentences(text)[0] if sentences(text) else text
+    base = set(tokens(re.sub(r"\$?\d[\d,.]*", " ", first)))
+    nums = set(re.findall(r"\d[\d,.]*\d|\d", first))
+    if len(base) < 4 or not nums:
+        return None
+    best = None
+    for _, ch in kb.index.search(list(weights), view.idx, k=25, weights=weights, prior=_prior(fr)):
+        cpv = ch.versions[view.idx]
+        if not cpv.pub_date or cpv.pub_date <= pv.pub_date:
+            continue
+        for s in _sentences(ch.text):
+            snums = set(re.findall(r"\d[\d,.]*\d|\d", s))
+            if not snums or snums == nums:
+                continue
+            st = set(tokens(re.sub(r"\$?\d[\d,.]*", " ", s)))
+            if len(base & st) / len(base | st) >= 0.5 and (best is None or cpv.pub_date > best[1].pub_date):
+                best = (s, cpv)
+    return best
 
 
 # =============================================================================================
@@ -682,6 +729,9 @@ class Answerer:
             d = rates_answer(view, fr)
             if d is not None:
                 return d
+            if fr.rate_q and re.search(r"\b(rates?|aprs?|apys?|interest|dividends?)\b", fr.norm) \
+                    and not fr.intents & {"how", "link", "list", "eligibility"} and not has_published_rate(view, fr.family):
+                return refusal(f"no page quotes a {fr.family} rate")
         d = H.contact_answer(view, fr)
         if d is not None:
             return d

@@ -18,7 +18,7 @@ SALIENT = {
     "arm": r"\barms?\b|\badjustable[- ]rate\b|\badjustable\b|\b\d{1,2}/\d{1,2}\b(?=.*\b(?:arm|mortgage|adjustable)\b)",
     "construction": r"\bconstruction\b",
     "fha": r"\bfha\b",
-    "va": r"\bva loans?\b",
+    "va": r"\bva (?:home |mortgage |purchase |refinance )?loans?\b|\bva mortgages?\b|\bva[- ]backed\b",
     "usda": r"\busda\b",
     "land": r"\bland loans?\b|\blot loans?\b",
     "interest_only": r"\binterest[- ]only\b",
@@ -115,13 +115,22 @@ def parse(question: str) -> QueryFrame:
         f.jumbo = True
     f.special = bool(re.search(r"\bspecials?\b|\bpromo", norm))
     f.regular = bool(re.search(r"\bregular\b|\bstandard\b", norm))
+    if f.special and f.regular:
+        # "the 17-month special (the regular one, not the jumbo)": regular means the non-jumbo special
+        f.regular = False
+        if f.jumbo is None:
+            f.jumbo = False
     if re.search(r"\broth\b", norm):
         f.ira = "roth"
     elif re.search(r"\btraditional\b", norm):
         f.ira = "traditional"
-    if re.search(r"\bbusiness\b", norm):
+    business = bool(re.search(r"\bbusiness\b", norm))
+    personal = bool(re.search(r"\bpersonal\b|\bconsumer\b", norm))
+    if business and personal:
+        f.scope = "both"               # "all the Visa cards, personal and business"
+    elif business:
         f.scope = "business"
-    elif re.search(r"\bpersonal\b|\bconsumer\b", norm):
+    elif personal:
         f.scope = "personal"
     if re.search(r"\brefinanc", norm):
         f.purpose = "refinance"

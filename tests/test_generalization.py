@@ -65,3 +65,41 @@ def test_date_in_question_picks_the_snapshot(real_system):
     assert "22" in a.text and a.text.startswith("As of May 19, 2026"), a.text
     b = real_system.answer("Did the 17-month special change since May 2026?")
     assert "4.10%" in b.text and not b.text.startswith("As of"), b.text
+
+
+STRESS_FIXES = [
+    # (question, must contain, must not contain) — failures found by the independent stress set
+    ("Tell me the annual percentage yield on the 17-month fixed certificate special (the regular one, not the jumbo).",
+     ["4.10%"], ["4.20%"]),
+    ("List all the Visa cards Dupaco offers, personal and business, with their APRs.",
+     ["Platinum Visa", "Rewards Visa", "Business Platinum", "Business Rewards"], []),
+    ("What's the total number of Dupaco branch locations right now?", ["22"], ["23 branch", "24 branch"]),
+    ("How much does Dupaco charge to send a domestic wire? What about an international one?", ["$25.00", "$55.00"], ["$10.00"]),
+    ("How many Dupaco employees used Volunteer Time Off in 2024?", ["256"], ["294"]),
+    ("How much grant funding has the Dupaco Foundation distributed since 2012?", ["$3.2 million"], ["$2.7 million"]),
+    ("How many members does Dupaco have?", ["182,627"], ["179,000"]),
+    ("Which web page shows Dupaco's current certificate (CD) rates?", ["dupaco.com/personal/savings-account"], ["home-loans"]),
+    ("What are the drive-up hours for the Hy-Vee branch?", ["March 31, 2026"], []),
+]
+
+
+@pytest.mark.parametrize("q,must,must_not", STRESS_FIXES)
+def test_stress_set_fixes(real_system, q, must, must_not):
+    a = real_system.answer(q)
+    for m in must:
+        assert m in a.text, a.text
+    for m in must_not:
+        assert m not in a.text, a.text
+
+
+@pytest.mark.parametrize("q", [
+    "What's the interest rate on a VA home loan?",                          # no VA product on the rate sheet
+    "Are Dupaco branches open on Thanksgiving, and what are the holiday hours?",
+    "What are the lobby hours for Dupaco's Davenport, Iowa branch?",        # no such branch
+    "What interest rate does Dupaco charge on private student loans?",      # only articles mention a rate
+    "What rate is available through Dupaco's Mortgage Rate Relief Program?",  # off the rate sheet since June
+])
+def test_more_unpublished_facts_are_refused(real_system, q):
+    a = real_system.answer(q)
+    assert a.confident is False, a.text
+    assert not (set(re.findall(r"\d+", a.text)) - set(re.findall(r"\d+", q))), a.text

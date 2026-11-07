@@ -263,7 +263,11 @@ def extract(pages: dict[str, list[PageVersion]], view_date: date) -> Claims:
                 am = re.search(r"As of:?\s*([A-Z][a-z]+\.? \d{1,2}, \d{4})", text)
                 when = parse_date(am.group(1)) if am else None
             if pv.ptype in ("newsroom", "pdf") and when:
-                for s in prose_sentences(text):
+                units = prose_sentences(text)
+                if pv.ptype == "pdf":         # "|Members: 182,627|" in a PDF's financial-strength table
+                    units += [plain(cell) for line in lines if line.lstrip().startswith("|")
+                              for cell in line.strip().strip("|").split("|") if ":" in cell]
+                for s in units:
                     if len(s) > 400:
                         continue
                     for name, rx in _STAT_PATTERNS:
@@ -313,5 +317,5 @@ _STAT_PATTERNS = [
     ("members", re.compile(r"(?i)membership (?:has grown to|of|tops|exceeds) (?:more than |nearly |over |almost )?(\d{2,3},\d{3})|\b(\d{2,3},\d{3}) members\b|Members:\s*(\d{2,3},\d{3})")),
     ("counties", re.compile(r"(?i)\b(\d{2,3}) counties\b")),
     ("employees", re.compile(r"(?i)\b(?:it has|dupaco has) (?:over|more than|nearly|almost) (\d{3,4}) employees\b")),
-    ("assets", re.compile(r"(?i)\$(\d{1,2}(?:\.\d{1,2})?) billion in assets|assets (?:exceeding|of nearly|of more than|of) \$(\d{1,2}(?:\.\d{1,2})?) billion")),
+    ("assets", re.compile(r"(?i)\$(\d{1,2}(?:\.\d{1,2})?) billion in assets|assets (?:exceeding|of nearly|of more than|of) \$(\d{1,2}(?:\.\d{1,2})?) billion|^Assets:\s*\$(\d{1,2}(?:\.\d{1,2})?) billion")),
 ]
