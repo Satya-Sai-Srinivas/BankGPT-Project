@@ -10,8 +10,8 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Optional
 
+from .claims import dept_name
 from .facts import Fact
 from .kb import KnowledgeBase, rank
 from .lexicon import FAMILY_KIND, FAMILY_NAME
@@ -159,6 +159,8 @@ def rate_conflicts(kb: KnowledgeBase) -> list[ConflictOut]:
         out_meta = {"hist": hist_sig, "prio": (q.get("my_ord", 0), q.get("purpose", "") not in ("", "purchase"),
                                                (q.get("amt") or (0, 0))[1], q.get("term", 0))}
         if fam == "mortgage" and q.get("purpose") == "equity_refinance":
+            if (key[0], key[1], "refinance") + key[3:] in latest.by_key:
+                continue           # the Home Equity Refinance table repeats the refinance rows label for label
             score -= 0.12
         values, sources = [], []
         for a in attrs:
@@ -224,9 +226,6 @@ def sibling_conflicts(kb: KnowledgeBase) -> list[ConflictOut]:
     return out
 
 
-_ORD = ["first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth"]
-
-
 def claim_conflicts(kb: KnowledgeBase) -> list[ConflictOut]:
     v = kb.views[-1]
     c = v.claims
@@ -258,21 +257,11 @@ def claim_conflicts(kb: KnowledgeBase) -> list[ConflictOut]:
                     f"({latest.page.url}, {fmt_date(latest.when)}) wins over older releases still on the site "
                     f"(majority voting would pick an outdated figure)."),
             score=stat_score.get(name, 0.4), kind="org_stat"))
-    # "Nth time" award claims (Forbes, Newsweek...)
-    awards: dict[str, list] = defaultdict(list)
-    for key, pvs in v.pages.items():
-        for pv in pvs:
-            if pv.ptype != "newsroom" or not pv.pub_date:
-                continue
-            for m in re.finditer(r"(?i)\b(" + "|".join(_ORD) + r") (?:time|consecutive year|year in a row)\b[^.]{0,80}", pv.text):
-                ctx = pv.text[max(0, m.start() - 120): m.end()]
-                org = re.search(r"\b(Forbes|Newsweek|S&P Global|Top Workplaces?|CUES)\b", ctx)
-                if org:
-                    awards[org.group(1)].append((pv.pub_date, m.group(1).lower(), pv, plain(ctx)[-180:]))
-    for org, xs in awards.items():
+    # "Nth time" award claims (Forbes, Newsweek...): the running count in the newest release wins
+    for org, xs in c.awards.items():
         ords = {}
-        for d, o, pv, q in sorted(xs):
-            ords[o] = (d, pv, q)
+        for a in sorted(xs, key=lambda a: (a.published, a.page.url)):
+            ords[a.ordinal] = (a.published, a.page, a.quote[-180:])
         if len(ords) < 2:
             continue
         latest_o = max(ords.items(), key=lambda kv: kv[1][0])
@@ -283,6 +272,42 @@ def claim_conflicts(kb: KnowledgeBase) -> list[ConflictOut]:
             reason=f"Each {org} release states the running count; the newest release ({fmt_date(latest_o[1][0])}) says "
                    f"'{latest_o[0]} time'.",
             score=0.8, kind="award_count"))
+    out.extend(phone_conflicts(v))
+    return out
+
+
+def phone_conflicts(v) -> list[ConflictOut]:
+    """One department extension printed on two different toll-free base numbers ('Mortgage Team at
+    800-383-1700 ext. 204' vs '800-373-7600, ext. 204'): the base number that is Dupaco's main line wins."""
+    c = v.claims
+    if not c.main_phone or not c.dept_phones:
+        return []
+    from .handlers import main_phone
+    main = main_phone(v)[0]
+    by_ext: dict[str, dict[str, list]] = defaultdict(lambda: defaultdict(list))
+    for d in c.dept_phones:
+        if d.ext:
+            by_ext[d.ext][d.number].append(d)
+    out = []
+    for ext, nums in sorted(by_ext.items()):
+        if len(nums) < 2 or main not in nums:
+            continue
+        for other, ds in sorted(nums.items()):
+            if other == main:
+                continue
+            dept = next((n for n in (dept_name(d.sentence) for d in ds) if n), None)
+            label = dept or f"Extension {ext}"
+            main_pages = sorted({d.page.url for d in nums[main]})
+            other_pages = sorted({d.page.url for d in ds})
+            out.append(ConflictOut(
+                topic=f"{label} phone number (ext. {ext}) [{label.lower()} phone contact number]",
+                values=[f"{main} ext. {ext}", f"{other} ext. {ext}"],
+                sources=[(nums[main][0].page.url, v.sid, nums[main][0].sentence[:180]), (ds[0].page.url, v.sid, ds[0].sentence[:180])],
+                resolution=f"{main} ext. {ext}",
+                reason=(f"Extension {ext} is printed on Dupaco's main line {main} (the contact page number) on "
+                        f"{len(main_pages)} page(s), but on {other} on {len(other_pages)} page(s) "
+                        f"({', '.join(other_pages[:3])}); the main line wins and the other base number is a typo."),
+                score=0.6, kind="phone"))
     return out
 
 
