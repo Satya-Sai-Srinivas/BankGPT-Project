@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Optional
 
-from .lexicon import FAMILY_KIND, family_of, normalize_q
+from .lexicon import FAMILY_KIND, family_of
 from .pages import PageVersion
 from .text import (
     first_pct, model_year_range, money_range, norm_dashes, parse_date, pct_values, plain, strip_footnotes,

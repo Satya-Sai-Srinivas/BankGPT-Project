@@ -7,7 +7,7 @@ pages than the current 22).
 from __future__ import annotations
 
 import re
-from collections import Counter, defaultdict
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Optional
@@ -63,6 +63,36 @@ class Event:
 
 
 @dataclass
+class Award:
+    org: str               # Forbes | Newsweek | ...
+    ordinal: str           # "fifth" in "the fifth time Forbes recognized Dupaco"
+    published: date
+    page: PageVersion
+    quote: str             # the ordinal sentence and the one before it (what the recognition was)
+
+
+@dataclass
+class DeptPhone:
+    number: str            # normalised 800-373-7600
+    ext: str               # "204" or ""
+    sentence: str
+    page: PageVersion
+
+
+ORDINALS = ["first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth"]
+_AWARD_ORD = re.compile(r"(?i)\b(" + "|".join(ORDINALS) + r") (?:time|consecutive year|year in a row)\b")
+_AWARD_ORG = re.compile(r"\b(Forbes|Newsweek|S&P Global|Top Workplaces?|CUES)\b")
+_PHONE_EXT = re.compile(r"(?<![\d-])(?:1[.-])?(8\d\d)[.-](\d{3})[.-](\d{4})(?:,?\s?ext\.?\s?(\d{1,4}))?")
+_DEPT = re.compile(r"\b(?:our|the) ((?:[A-Z][\w&]+ ){0,3}(?:Team|Department|Center|Centre|Services|Group))\b")
+
+
+def dept_name(sentence: str) -> Optional[str]:
+    """'please contact our Mortgage Team at ...' -> 'Mortgage Team'."""
+    m = _DEPT.search(sentence)
+    return m.group(1) if m else None
+
+
+@dataclass
 class Claims:
     branches: list[Branch] = field(default_factory=list)
     stats: dict[str, list[Stat]] = field(default_factory=dict)
@@ -72,10 +102,16 @@ class Claims:
     link_lines: list[tuple[str, str, str, PageVersion]] = field(default_factory=list)  # (line, anchor, target, page)
     fees: list[tuple[str, str, PageVersion]] = field(default_factory=list)              # (fee name, amount, page)
     inlinks: Counter = field(default_factory=Counter)
+    awards: dict[str, list[Award]] = field(default_factory=dict)
+    dept_phones: list[DeptPhone] = field(default_factory=list)
 
     def latest(self, name: str) -> Optional[Stat]:
         xs = self.stats.get(name) or []
         return max(xs, key=lambda s: (s.when, s.page.authority, s.page.url)) if xs else None
+
+    def latest_award(self, org: str) -> Optional[Award]:
+        xs = self.awards.get(org) or []
+        return max(xs, key=lambda a: (a.published, ORDINALS.index(a.ordinal), a.page.url)) if xs else None
 
 
 def _schedule(lines: list[str], start: int) -> tuple[dict, dict]:
@@ -152,6 +188,27 @@ def extract(pages: dict[str, list[PageVersion]], view_date: date) -> Claims:
                 c.routing.append((m.group(1), pv))
             for m in re.finditer(r"\*\*Phone:\*\*\s*\[?(\d{3}-\d{3}-\d{4})", text):
                 c.main_phone.append((m.group(1), pv))
+            # ---- toll-free numbers with their sentence ("call our Mortgage Team at 800-373-7600, ext. 204")
+            if "800" in text or "888" in text or "877" in text or "866" in text:
+                for s in prose_sentences(text):
+                    if len(s) > 600:
+                        continue
+                    for m in _PHONE_EXT.finditer(s):
+                        c.dept_phones.append(DeptPhone(f"{m.group(1)}-{m.group(2)}-{m.group(3)}", m.group(4) or "", s, pv))
+            # ---- "Nth time" recognition statements in dated releases ("the fifth time Forbes recognized Dupaco")
+            if pv.ptype == "newsroom" and pv.pub_date and _AWARD_ORD.search(text):
+                sents = prose_sentences(text)
+                for i, s in enumerate(sents):
+                    m = _AWARD_ORD.search(s)
+                    if not m:
+                        continue
+                    prev = sents[i - 1] if i else ""
+                    org = _AWARD_ORG.search(s) or _AWARD_ORG.search(prev)
+                    if org:
+                        quote = (prev + " " + s).strip() if prev and len(prev) < 400 else s
+                        quote = re.sub(r"^[A-Z][A-Z .']{2,30},\s*[A-Za-z.]+\s*[—–-]+\s*", "", quote)  # "DUBUQUE, Iowa—"
+                        c.awards.setdefault(org.group(1), []).append(
+                            Award(org.group(1), m.group(1).lower(), pv.pub_date, pv, quote))
             # ---- contact-page locator: "### Dupaco Credit Union / Dupaco Branch / 3299 Hillcrest Rd., Dubuque, IA, 52001"
             for i, line in enumerate(lines):
                 if line.strip() == "Dupaco Branch" and i + 1 < len(lines):

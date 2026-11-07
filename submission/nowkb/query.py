@@ -7,10 +7,11 @@ from datetime import date
 from typing import Optional
 
 from .lexicon import FAMILY_KIND, families_in, normalize_q
-from .text import MONTHS, money_values, month_num, parse_date, term_months, words_to_digits
+from .text import money_values, month_num, parse_date, term_months, words_to_digits
 
 RATE_WORDS = re.compile(
-    r"\b(rates?|aprs?|apys?|interest|dividends?|yields?|earns?|pays?|percent|%)\b|\bhow much (?:interest|do i earn)", re.I
+    r"\b(rates?|aprs?|apys?|interest|dividends?|yields?|earns?|earning|pays?|paying|percent|%)\b"
+    r"|\bhow much (?:interest|do i earn)", re.I
 )
 # Qualifiers that name a product variant; if no table row carries them, the site does not publish it.
 SALIENT = {
@@ -60,8 +61,9 @@ class QueryFrame:
 
 
 _INTENTS = [
-    ("history", r"\b(was|were|used to|previous(?:ly)?|before|changed?|changes|history|went (?:up|down)|increase[ds]?|decrease[ds]?|raised|lowered|as of)\b"),
-    ("status", r"\bstill (?:open|available|offered|running)\b|\bis .* (?:open|closed)\b|\bclos(?:e|ed|ing)\b"),
+    ("history", r"\b(was|were|did|had|used to|previous(?:ly)?|before|changed?|changes|history|went (?:up|down)|increase[ds]?|decrease[ds]?|raised|lowered|as of)\b"),
+    ("status", r"\bstill (?:open|available|offered|running)\b|\bis .* (?:open|closed)\b|\bclos(?:e|ed|ing)\b|"
+               r"\bhappen(?:ing|ed|s)? (?:to|with)\b|\bshut(?:ting)? down\b|\bgoing away\b"),
     ("when", r"\bwhen\b|\bwhat date\b|\bwhich date\b"),
     ("hours", r"\bhours?\b|\bopen (?:on|until|till)\b|\bwhat time\b|\bclose[sd]? at\b|\bwhen (?:are|is|do|does) [^?]{0,40}\bopen\b"),
     ("drive_up", r"\bdrive-up\b"),
@@ -69,7 +71,9 @@ _INTENTS = [
     ("address", r"\baddress\b|\bwhere (?:is|are)\b|\blocated\b|\blocation of\b"),
     ("phone", r"\bphone\b|\bcall\b|\bnumber to call\b|\btelephone\b|\bcontact\b"),
     ("routing", r"\brouting\b"),
-    ("link", r"\b(link|url|website address|web ?page|web address)\b|\bwhere (?:can|do) i (?:find|see|go)\b.*\bonline\b"),
+    ("link", r"\b(link|url|website address|web ?page|web address|locator)\b|\bwhere (?:can|do) i (?:find|see|go)\b.*\bonline\b|"
+             r"\b(?:what|which) (?:web ?)?(?:page|site)\b|\bwhere on (?:the|your) (?:web ?)?site\b|"
+             r"^(?!.*\b(?:hours?|open|close[sd]?|address|phone)\b).*\b(?:find|locate|nearest|closest)\b.*\b(?:branch(?:es)?|atms?)\b"),
     ("count", r"\bhow many\b|\bnumber of\b"),
     ("list", r"\b(all|list|every|each|which .* (?:do you|does dupaco) (?:offer|have)|what .* do you offer|what .* (?:are|is) offered|options)\b"),
     ("highest", r"\b(highest|best|top|maximum|max)\b"),

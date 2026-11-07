@@ -8,11 +8,11 @@ from typing import Optional
 from .facts import Fact
 from .kb import ABLATE, KnowledgeBase, View
 from .lexicon import EXPANSIONS, FAMILY_KIND, FAMILY_NAME
-from .pages import TIER1, PageVersion
-from .query import QueryFrame, kind, parse
+from .pages import PageVersion
+from .query import QueryFrame, parse
 import math
 
-from .text import fmt_date, fmt_money, plain, sentences, tokens
+from .text import fmt_date, plain, sentences, tokens
 
 REFUSAL = "I don't know — that isn't listed on Dupaco's website. Please contact Dupaco directly for details."
 
@@ -78,7 +78,7 @@ def select_rows(view: View, fr: QueryFrame, family: str) -> list[tuple[tuple, Fa
                 continue
         if fr.term and q.get("term") and q["term"] != fr.term:
             continue
-        if fr.term and not q.get("term") and family in ("certificate", "auto_loan", "mortgage", "personal_loan"):
+        if fr.term and not q.get("term") and family in ("certificate", "ira", "auto_loan", "mortgage", "personal_loan"):
             continue
         if fr.jumbo and not q.get("jumbo"):
             continue
@@ -467,6 +467,13 @@ def generic_answer(kb: KnowledgeBase, view: View, fr: QueryFrame) -> Draft:
     text = " ".join(picked)
     pv = ch.versions[view.idx]
     sources = [(pv.url, view.sid, text[:200])]
+    # Off-topic guard: the question's most specific term is one the site barely uses, it is not in the
+    # passage we picked, and the passage covers little of the question ("What is Dupaco's SWIFT code?",
+    # "Is Dupaco closed on Thanksgiving?"). The site does not say, so say so instead of quoting a near miss.
+    rel = _relevance(fr, qset, idf, text, ch, pv)
+    rel_df = kb.index.df.get(rel[2], 0)
+    if not rel[1] and rel_df <= RARE_DF and rel[3] < MIN_PASSAGE_COVER:
+        return refusal(f"off-topic evidence (rarest term {rel[2]!r} df={rel_df} not in passage, cover {rel[3]:.2f})")
     # Year-qualified statistics reported in several releases are distinct facts: list them all.
     if _YEAR.search(text) and ("count" in fr.intents or "last year" in fr.norm):
         series = _year_series(kb, view, fr, text, weights)
@@ -474,14 +481,19 @@ def generic_answer(kb: KnowledgeBase, view: View, fr: QueryFrame) -> Draft:
             text = series[0]
             sources += series[1]
     # A fee question needs an amount that is about *this* fee (not just any "$" on the page).
-    if "fee" in fr.intents and re.search(r"\b(fee|charge|cost)\b", fr.norm):
+    if "fee" in fr.intents and (re.search(r"\b(fee|charge|cost)\b", fr.norm) or
+                                (re.search(r"\bhow much (?:is|does)\b", fr.norm) and not fr.rate_q)):
         ctx = set(tokens(ch.heading + " " + pv.title))
         total = sum(idf.get(t, 1.0) for t in qset) or 1.0
         cover = max((sum(idf.get(t, 1.0) for t in qset & (set(tokens(s)) | ctx)) / total
-                     for s in sentences(text) if "$" in s or re.search(r"(?i)\bno\b[^.]{0,25}\bfees?\b", s)),
+                     for s in sentences(text) if _STATES_FEE.search(s)),
                     default=0.0)
         if cover < 0.7:
-            return refusal(f"fee question but no amount for this fee (coverage {cover:.2f})")
+            alt = _fee_sentence(view, hits[:6], qset, idf, total)
+            if alt is None:
+                return refusal(f"fee question but no amount for this fee (coverage {cover:.2f})")
+            _, text, pv = alt
+            sources = [(pv.url, view.sid, text[:200])]
     # A rate question answered by text with no rate in it means the rate is not published.
     if fr.rate_q and re.search(r"\b(rate|apr|apy|interest)\b", fr.norm) and "%" not in text \
             and not (fr.intents & {"how", "link", "list", "eligibility"}):
@@ -493,8 +505,58 @@ def generic_answer(kb: KnowledgeBase, view: View, fr: QueryFrame) -> Draft:
             text += f" You can also call Dupaco at {mp[0]}."
             sources.append((mp[1].url, view.sid, f"Phone: {mp[0]}"))
     d = Draft(text=text, sources=sources)
-    d.trace.append(f"generic: {pv.url} score={sc:.2f}")
+    d.trace.append(f"generic: {pv.url} score={sc:.2f} cover={rel[0]:.2f} pcover={rel[3]:.2f} df={rel_df} rarest={rel[2]}:{rel[1]}")
     return d
+
+
+RARE_DF = 3                 # a term on at most this many passages site-wide is specific to one topic
+MIN_PASSAGE_COVER = 0.5     # idf-weighted share of the question the passage must cover otherwise
+
+
+def _relevance(fr: QueryFrame, qset: set, idf: dict, text: str, ch, pv) -> tuple[float, bool, str, float]:
+    """How much of the question the picked evidence is about: (idf-weighted share of the question's terms
+    found in the answer sentences + section heading + page title, whether the question's most specific
+    term occurs anywhere in the passage, that term, idf-weighted share found anywhere in the passage)."""
+    content = {t for t in qset if not t.isdigit()}
+    if not content:
+        return 1.0, True, "", 1.0
+    near = set(tokens(text)) | set(tokens(ch.heading + " " + pv.title))
+    passage = near | set(tokens(ch.text))
+    total = sum(idf.get(t, 1.0) for t in content) or 1.0
+    cover = sum(idf.get(t, 1.0) for t in content & near) / total
+    pcover = sum(idf.get(t, 1.0) for t in content & passage) / total
+    rarest = max(sorted(content), key=lambda t: idf.get(t, 0.0))
+    return cover, rarest in passage, rarest, pcover
+
+
+_STATES_FEE = re.compile(r"\$\d|(?i:\bno\b[^.]{0,25}\bfees?\b)")
+
+
+def _fee_sentence(view: View, hits: list, qset: set, idf: dict, total: float):
+    """Best sentence in the top passages that states an amount or 'no ... fee' for what was asked, judged
+    with its own paragraph as context ('...no annual fees...' in a footnote about the Platinum Visa)."""
+    best = None
+    for _, ch in hits:
+        pv = ch.versions[view.idx]
+        head = set(tokens(ch.heading + " " + pv.title))
+        for para in ch.text.split("\n"):
+            p = plain(para)
+            if not p or not _STATES_FEE.search(p):
+                continue
+            ptoks = set(tokens(p)) | head
+            for s in sentences(p):
+                if not _STATES_FEE.search(s):
+                    continue
+                cover = sum(idf.get(t, 1.0) for t in qset & ptoks) / total
+                direct = sum(idf.get(t, 1.0) for t in qset & set(tokens(s))) / total
+                key = (cover, direct, -len(s))
+                if cover >= 0.7 and direct >= 0.3 and (best is None or key > best[0]):
+                    best = (key, s, pv)
+    if best is None:
+        return None
+    s = re.sub(r"^[-*•]\s*", "", best[1])                 # list marker
+    s = re.sub(r"(?<=[a-z])\s?\d{1,2}(?=\.?$)", "", s)     # footnote digit: "No annual fee 2."
+    return best[0][0], s, best[2]
 
 
 def _year_series(kb: KnowledgeBase, view: View, fr: QueryFrame, text: str, weights: dict):
@@ -517,6 +579,29 @@ def _year_series(kb: KnowledgeBase, view: View, fr: QueryFrame, text: str, weigh
 
 
 # =============================================================================================
+# Intents that a rate table cannot answer; a product question carrying one of them is not a rate question.
+_NON_RATE_INTENTS = {"hours", "drive_up", "lobby", "link", "eligibility", "phone", "address", "routing", "count",
+                     "when"}
+
+
+def implicit_rate(fr: QueryFrame) -> bool:
+    """A product question without a rate word that only the rate table can answer.
+
+    '17-month certificate special', "What's the 10-month jumbo special now?", 'What credit cards do you
+    offer?' name a rate-bearing product plus a variant (term, special, jumbo, model year, balance tier,
+    Roth/Traditional) or ask for the product list, and ask for nothing else."""
+    if not fr.family or fr.rate_q or fr.asks_other or fr.intents & _NON_RATE_INTENTS:
+        return False
+    if FAMILY_KIND.get(fr.family) not in ("deposit", "loan", "mortgage", "card"):
+        return False
+    if re.search(r"\b(?:fees?|charges?|cost|price|penalt\w*)\b|\bhow (?:do|can|should|would) i\b", fr.norm):
+        return False
+    variant = bool(fr.term or fr.special or fr.jumbo or fr.model_year or fr.ira) or \
+        (fr.amount is not None and FAMILY_KIND.get(fr.family) == "deposit")
+    listing = "list" in fr.intents and fr.family in ("credit_card", "certificate")
+    return variant or listing
+
+
 class Answerer:
     def __init__(self, kb: KnowledgeBase, composer=None) -> None:
         self.kb = kb
@@ -527,7 +612,9 @@ class Answerer:
     def answer(self, question: str, as_of: Optional[str] = None) -> Draft:
         view = self.kb.view_for(as_of)
         fr = parse(question)
-        if not as_of and fr.date_in_text and "history" in fr.intents and fr.date_in_text < view.taken_on:
+        # "What was X in May 2026?" is an as-of question; "has X gone up since May?" is a change question.
+        if not as_of and fr.date_in_text and "history" in fr.intents and not fr.change_q \
+                and fr.date_in_text < view.taken_on:
             view = self.kb.view_for(fr.date_in_text.isoformat())
         ck = (re.sub(r"\s+", " ", (question or "").strip().lower()), view.idx)
         if ck in self.cache:
@@ -536,7 +623,7 @@ class Answerer:
             d = self._route(view, fr)
         except Exception as e:  # never crash the harness: degrade to an honest refusal
             d = refusal(f"internal error {type(e).__name__}: {e}")
-        if self.composer is not None and d.trace and d.trace[0].startswith(("generic", "refuse: weak")):
+        if self.composer is not None and d.trace and d.trace[0].startswith(("generic", "refuse: weak", "refuse: off-topic")):
             d = self._llm_rewrite(view, fr, d)
         d = guard(d, fr, view)
         if view.idx != len(self.kb.views) - 1 and d.confident:
@@ -550,12 +637,17 @@ class Answerer:
         if "handlers" in ABLATE:        # retrieval-only baseline
             return generic_answer(self.kb, view, fr)
         it = fr.intents
-        if "link" in it or (re.search(r"\bonline\b", fr.norm) and re.search(r"\b(join|apply|open|sign up|enroll)\b", fr.norm)):
+        if "link" in it or (re.search(r"\bonline\b", fr.norm) and
+                            re.search(r"\b(join|apply|open|sign up|enroll|become a member|membership)\b", fr.norm)):
             d = H.link_answer(view, fr)
             if d is not None:
                 return d
         if "routing" in it:
             d = H.routing_answer(view, fr)
+            if d is not None:
+                return d
+        if "phone" in it:
+            d = H.phone_answer(view, fr)
             if d is not None:
                 return d
         if it & {"hours", "drive_up", "lobby"} and not fr.rate_q:
@@ -574,11 +666,15 @@ class Answerer:
             d = H.stat_answer(view, fr)
             if d is not None:
                 return d
+        if "award" in it:
+            d = H.award_answer(view, fr)
+            if d is not None:
+                return d
         d = H.fee_answer(view, fr)
         if d is not None:
             return d
         fee_q = bool(re.search(r"\bfees?\b", fr.norm)) or (bool(re.search(r"\b(charges?|cost)\b", fr.norm)) and not fr.rate_q)
-        if fr.family and (fr.rate_q or fr.pct_in_q) and not fee_q and not fr.asks_other:
+        if fr.family and (fr.rate_q or fr.pct_in_q or implicit_rate(fr)) and not fee_q and not fr.asks_other:
             if fr.change_q and view.idx == len(self.kb.views) - 1:
                 d = change_answer(self.kb, view, fr)
                 if d is not None:

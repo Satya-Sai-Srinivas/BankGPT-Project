@@ -25,7 +25,9 @@ FAMILIES: list[tuple[str, str, str, str]] = [
     ("home_equity_loan", "Home Equity Loan (Fixed)", "loan", r"\bhome equity loan\b|\bloan\s?-\s?standard\b"),
     ("home_improvement", "Home Improvement Loan", "loan", r"\bhome improvement\b"),
     ("mortgage_relief", "Mortgage Rate Relief Program", "mortgage", r"\brate relief\b"),
-    ("mortgage", "Mortgage", "mortgage", r"\bmortgages?\b|\bhome loans?\b|\b(?:30|20|15|10)[- ]?(?:year|yr)\b.*\bfixed\b|\bfixed conventional\b|\bconventional\b|\brefinanc\w*\b.*\b(?:home|house|mortgage)\b|\bhome purchase\b|\bbuy(?:ing)? a (?:home|house)\b"),
+    ("mortgage", "Mortgage", "mortgage", r"\bmortgages?\b|\bhome loans?\b|\b(?:30|20|15|10)[- ]?(?:year|yr)\b.*\b(?:fixed|refinanc\w*)\b|"
+                                         r"\brefinanc\w*\b.*\b(?:30|20|15|10)[- ]?(?:year|yr)\b|\bfixed conventional\b|\bconventional\b|"
+                                         r"\brefinanc\w*\b.*\b(?:home|house|mortgage)\b|\bhome purchase\b|\bbuy(?:ing)? a (?:home|house)\b"),
     ("atv_loan", "ATV, Snowmobile & Jet Ski Loan", "loan", r"\batv\b|\bsnowmobile\b|\bjet ?ski\b|\bpowersport"),
     ("boat_rv_loan", "Boat & RV Loan", "loan", r"\bboats?\b|\brv\b|\bcamper\b|\brecreational\b"),
     ("auto_loan", "Auto & Motorcycle Loan", "loan", r"\bauto\b|\bcar\b|\bcars\b|\bvehicles?\b|\bmotorcycles?\b|\btruck\b|\bsuv\b|\bmodel[- ]year\b"),
